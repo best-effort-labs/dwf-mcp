@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 import pytest
 
-from dwf_mcp.instrument import Instrument
+from dwf_mcp.artifacts import ArtifactWriter
+from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.registry import InstrumentRegistry
 
 
 class DummyInstrument(Instrument):
     name = "dummy"
-    required_pins: list[str] = []
+    tools: ClassVar[dict[str, tuple[str, dict[str, Any]]]] = {
+        "ping": ("ping", {"type": "object", "properties": {}}),
+    }
 
-    def configure(self, **kwargs: object) -> None:
-        self._configured = True
+    def __init__(self, device: object, artifacts: ArtifactWriter) -> None:
+        self.device = device
+        self.artifacts = artifacts
+        self._configured = False
+
+    def ping(self) -> dict[str, str]:
+        return {"pong": "ok"}
 
     def release(self) -> None:
         self._configured = False
@@ -39,10 +49,17 @@ def test_unknown_instrument_raises() -> None:
 
 def test_instrument_abc_requires_name() -> None:
     class Nameless(Instrument):  # type: ignore[misc]
-        required_pins: list[str] = []
-        def configure(self, **kwargs: object) -> None: ...
+        tools: ClassVar[dict[str, tuple[str, dict[str, Any]]]] = {}
+
+        def __init__(self, device: object, artifacts: ArtifactWriter) -> None: ...
         def release(self) -> None: ...
-    # name attribute missing should be flagged at registration time
+
     reg = InstrumentRegistry()
     with pytest.raises(TypeError):
         reg.register(Nameless)
+
+
+def test_instrument_not_configured_is_exception() -> None:
+    err = InstrumentNotConfigured("scope must be configured before capture")
+    assert isinstance(err, Exception)
+    assert "scope" in str(err)
