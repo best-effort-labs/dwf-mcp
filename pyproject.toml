@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dwf-mcp"
+version = "0.1.0"
+description = "MCP server exposing the Digilent WaveForms SDK"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0",
+    "pydwf>=1.1",
+    "numpy>=1.26",
+    "pyarrow>=15",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.12",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+dwf-mcp = "dwf_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dwf_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "hardware: requires a physically connected AD3 (deselect with -m 'not hardware')",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+strict = true
