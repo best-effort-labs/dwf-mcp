@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfDeviceLost
-from dwf_mcp.policy import SafetyPolicy
+from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 
 
 class DwfDevice:
@@ -68,6 +70,52 @@ class DwfDevice:
             return
         if time.monotonic() - self._last_activity >= self.idle_timeout_s:
             self.close()
+
+    def gate_output(self, kind: str, **params: Any) -> None:
+        """Safety gate for any 'output goes hot' path. Checks policy, writes the safety
+        log, raises SafetyViolation on rejection. Rejected attempts are logged too."""
+        rejected = False
+        rejection_reason: str | None = None
+        try:
+            self._check_policy(kind, **params)
+        except SafetyViolation as exc:
+            rejected = True
+            rejection_reason = str(exc)
+            raise
+        finally:
+            self._append_safety_log(
+                kind=kind, params=params, rejected=rejected, reason=rejection_reason
+            )
+
+    def _check_policy(self, kind: str, **params: Any) -> None:
+        if kind == "supply_enable":
+            channel = params.get("channel")
+            voltage = params.get("voltage")
+            current_limit = params.get("current_limit")
+            if isinstance(channel, str) and isinstance(voltage, int | float):
+                self.policy.check_supply_voltage(channel, float(voltage))
+            if isinstance(current_limit, int | float):
+                self.policy.check_supply_current(float(current_limit))
+        elif kind == "awg_start":
+            amplitude = params.get("amplitude")
+            if isinstance(amplitude, int | float):
+                self.policy.check_awg_amplitude(float(amplitude))
+        # Unknown kinds pass through (forward-compat for stage 3 kinds).
+
+    def _append_safety_log(
+        self, kind: str, params: dict[str, Any], rejected: bool, reason: str | None
+    ) -> None:
+        path = self.workspace / "dwf-safety.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": datetime.now(UTC).isoformat(),
+            "kind": kind,
+            "params": params,
+            "rejected": rejected,
+            "reason": reason,
+        }
+        with path.open("a") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
 
     def status(self) -> dict[str, Any]:
         idle_remaining: float | None = None

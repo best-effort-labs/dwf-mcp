@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio  # noqa: F401
+import json
 import time
 
 import pytest
@@ -9,7 +10,7 @@ from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.backend import DwfDeviceLost
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
-from dwf_mcp.policy import SafetyPolicy
+from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 
 
 @pytest.fixture
@@ -100,3 +101,65 @@ def test_activity_resets_idle_timer(tmp_path) -> None:
     time.sleep(0.15)
     device.tick_idle()
     assert device.is_open
+
+
+def test_gate_output_supply_pos_within_cap(tmp_path) -> None:
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(supply_max_voltage_pos=3.3),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    device.gate_output("supply_enable", channel="pos", voltage=3.0)
+    log_path = tmp_path / "dwf-safety.log"
+    assert log_path.exists()
+    lines = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+    assert lines[-1]["kind"] == "supply_enable"
+    assert lines[-1]["params"]["voltage"] == 3.0
+
+
+def test_gate_output_supply_pos_over_cap_raises(tmp_path) -> None:
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(supply_max_voltage_pos=3.3),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    with pytest.raises(SafetyViolation) as exc:
+        device.gate_output("supply_enable", channel="pos", voltage=5.0)
+    assert "5.0" in str(exc.value)
+    # Rejection is also logged (for audit), with rejected=True
+    log_lines = (tmp_path / "dwf-safety.log").read_text().splitlines()
+    lines = [json.loads(line) for line in log_lines if line.strip()]
+    assert lines[-1]["rejected"] is True
+
+
+def test_gate_output_supply_current(tmp_path) -> None:
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(supply_max_current=0.5),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    device.gate_output("supply_enable", channel="pos", voltage=3.0, current_limit=0.4)
+    with pytest.raises(SafetyViolation):
+        device.gate_output("supply_enable", channel="pos", voltage=3.0, current_limit=0.6)
+
+
+def test_gate_output_unknown_kind_passes_through(tmp_path) -> None:
+    # Kinds we don't recognize don't get policy checks — they still log.
+    # This preserves forward-compat with future kinds added in stage 3.
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    device.gate_output("future_kind", foo="bar")
+    log_lines = (tmp_path / "dwf-safety.log").read_text().splitlines()
+    lines = [json.loads(line) for line in log_lines if line.strip()]
+    assert lines[-1]["kind"] == "future_kind"
