@@ -48,7 +48,7 @@ class ArtifactWriter:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        np.savez_compressed(output_path, **arrays)
+        np.savez_compressed(output_path, **arrays)  # type: ignore[arg-type]
         sidecar_path = output_path.with_suffix(".json")
         sidecar = {
             "instrument": instrument,

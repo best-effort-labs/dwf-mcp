@@ -25,7 +25,7 @@ class PydwfBackend(DwfBackend):
     """Backend backed by pydwf / libdwf. Imported lazily so unit tests can avoid it."""
 
     def __init__(self) -> None:
-        from pydwf import DwfLibrary  # type: ignore[import-not-found]
+        from pydwf import DwfLibrary  # type: ignore[import-untyped]
 
         self._dwf = DwfLibrary()
         self._device: Any | None = None

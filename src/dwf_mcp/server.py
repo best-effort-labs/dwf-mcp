@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
 from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.backend import DwfBackend
@@ -57,7 +57,7 @@ class DwfMcpApp:
     async def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         try:
             self.device.tick_idle()
-            return await self._tools[name](**args)
+            return cast(dict[str, Any], await self._tools[name](**args))
         except KeyError:
             raise ValueError(f"unknown tool {name!r}") from None
 
@@ -130,11 +130,11 @@ def main() -> None:
     app = build_app()
     server: Server = Server("dwf-mcp")
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_tools() -> list[dict[str, Any]]:
         return [{"name": name, "description": ""} for name in app._tools]  # noqa: SLF001
 
-    @server.call_tool()
+    @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> Any:
         return await app.call_tool(name, arguments)
 
