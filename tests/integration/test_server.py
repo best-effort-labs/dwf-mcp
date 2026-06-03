@@ -129,3 +129,21 @@ async def test_release_called_on_close(tmp_path) -> None:
     await app.call_tool("waveforms.close", {})
     assert released["called"] is True
     assert app.instruments == {}
+
+
+@pytest.mark.asyncio
+async def test_safety_log_writes_to_workspace_dir_after_open(tmp_path) -> None:
+    """After waveforms.open(workspace_dir=...), gate_output must write the safety log
+    to the user-specified dir, not fall through to the module logger.
+
+    Regression test for the _workspace_raw coordination bug between Tasks 2 and 3.
+    """
+    app = build_app(backend_name="fake", workspace="")  # construct with no workspace
+    await app.call_tool("waveforms.open", {"workspace_dir": str(tmp_path)})
+    # Drive a successful gate_output via DwfDevice directly (Supply lands in Task 8).
+    app.device.gate_output("supply_enable", channel="pos", voltage=3.0)
+    log_path = tmp_path / "dwf-safety.log"
+    files = list(tmp_path.iterdir())
+    assert log_path.exists(), f"expected safety log at {log_path}, got files: {files}"
+    content = log_path.read_text()
+    assert "supply_enable" in content

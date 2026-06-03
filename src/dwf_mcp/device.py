@@ -15,6 +15,18 @@ log = logging.getLogger(__name__)
 
 
 class DwfDevice:
+    _workspace: Path
+    _workspace_raw: str
+
+    @property
+    def workspace(self) -> Path:
+        return self._workspace
+
+    @workspace.setter
+    def workspace(self, value: Path | str) -> None:
+        self._workspace_raw = str(value)
+        self._workspace = Path(value) if value else Path(".")
+
     def __init__(
         self,
         backend: DwfBackend,
@@ -26,8 +38,7 @@ class DwfDevice:
         self.backend = backend
         self.policy = policy
         self.allocator = allocator
-        self._workspace_raw = str(workspace)
-        self.workspace = Path(workspace)
+        self.workspace = workspace  # property setter sets _workspace and _workspace_raw
         self.idle_timeout_s = idle_timeout_s
         self._info: DeviceInfo | None = None
         self._last_activity: float | None = None
