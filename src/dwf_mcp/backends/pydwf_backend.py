@@ -20,6 +20,7 @@ import numpy as np
 from pydwf import (  # type: ignore[import-untyped]
     DwfAcquisitionMode,
     DwfAnalogCoupling,
+    DwfEnumFilter,
     DwfLibrary,
     DwfState,
     DwfTriggerSlope,
@@ -39,9 +40,15 @@ class PydwfBackend(DwfBackend):
         self._device: Any | None = None
         self._info: DeviceInfo | None = None
 
+    # DwfEnumFilter.Type tells libdwf to interpret the low bits as connection-type flags
+    # rather than the legacy device-type codes (where 1 = Electronics Explorer).
+    # Combining with USB skips the local mDNS/UDP network scan that triggers the macOS
+    # "dwf wants to use the network" permission prompt on first run.
+    _ENUM_FILTER = DwfEnumFilter.Type | DwfEnumFilter.USB
+
     def enumerate(self) -> list[DeviceInfo]:
         enum = self._dwf.deviceEnum
-        count = enum.enumerateDevices()
+        count = enum.enumerateDevices(self._ENUM_FILTER)
         out: list[DeviceInfo] = []
         for i in range(count):
             try:
@@ -67,7 +74,7 @@ class PydwfBackend(DwfBackend):
         if self._info is not None:
             return self._info
         enum = self._dwf.deviceEnum
-        count = enum.enumerateDevices()
+        count = enum.enumerateDevices(self._ENUM_FILTER)
         target_index: int | None = None
         for i in range(count):
             if serial is None or enum.serialNumber(i) == serial:
