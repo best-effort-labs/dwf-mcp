@@ -51,14 +51,13 @@ class Supply(Instrument):
         self, channel: str, voltage: float, current_limit: float | None = None
     ) -> dict[str, Any]:
         if channel not in self._layout:
-            raise ValueError(
-                f"unknown supply channel {channel!r}; have {sorted(self._layout)}"
-            )
+            raise ValueError(f"unknown supply channel {channel!r}; have {sorted(self._layout)}")
         ch_idx, nodes = self._layout[channel]
-        # Apply Scope's partial-failure pattern: claim pins, then clear stale state,
-        # then try backend calls, then commit state on success.
+        # Apply Scope's partial-failure pattern: capture prior claim + setpoint state,
+        # claim new pins, clear stale setpoint, try backend calls, on failure restore.
+        prior_claims = sorted(self._claimed_channels())
         prior_setpoint = self._setpoints.get(channel)
-        new_claims = sorted(self._claimed_channels() | {channel})
+        new_claims = sorted(set(prior_claims) | {channel})
         self.device.allocator.claim("supply", new_claims)
         self._setpoints.pop(channel, None)
         try:
@@ -66,8 +65,11 @@ class Supply(Instrument):
             if current_limit is not None:
                 self.device.backend.supply_node_set(ch_idx, nodes["current"], current_limit)
         except Exception:
-            # On backend failure: revert claim list and restore prior setpoint.
-            self.device.allocator.claim("supply", sorted(self._claimed_channels()))
+            # Restore prior claim list (or fully release if there were no prior claims).
+            if prior_claims:
+                self.device.allocator.claim("supply", prior_claims)
+            else:
+                self.device.allocator.release("supply")
             if prior_setpoint is not None:
                 self._setpoints[channel] = prior_setpoint
             raise

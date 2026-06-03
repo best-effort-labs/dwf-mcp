@@ -119,3 +119,70 @@ def test_safety_log_records_supply_enable(supply: Supply, tmp_path: Path) -> Non
     assert lines[-1]["kind"] == "supply_enable"
     assert lines[-1]["params"]["voltage"] == 3.0
     assert lines[-1]["rejected"] is False
+
+
+def test_set_failure_releases_new_channel_when_no_prior(supply: Supply, monkeypatch) -> None:
+    """Fresh set() on a new channel that fails mid-backend must drop the pin claim."""
+    backend = supply.device.backend
+    def boom_node_set(channel, node, value):
+        raise RuntimeError("backend on fire")
+    monkeypatch.setattr(backend, "supply_node_set", boom_node_set)
+    with pytest.raises(RuntimeError):
+        supply.set(channel="vpos", voltage=3.0, current_limit=0.4)
+    # Pin claim must be released; no _setpoints entry.
+    assert supply.device.allocator.claimed_pins() == {}
+    assert "vpos" not in supply._setpoints  # noqa: SLF001
+
+
+def test_set_failure_restores_prior_claims_and_setpoint(supply: Supply, monkeypatch) -> None:
+    """A failed set() on an existing channel must preserve the prior claim AND setpoint.
+
+    Sets up vpos with a known setpoint, then a failing set() on vneg. After the failure:
+    - vpos should still be claimed (didn't lose ground)
+    - vpos's setpoint should be unchanged
+    - vneg should NOT be claimed (failure rolled back)
+    - vneg should NOT have a setpoint
+    """
+    # Establish vpos as the prior state.
+    supply.set(channel="vpos", voltage=2.5, current_limit=0.3)
+    assert supply.device.allocator.claimed_pins() == {"vpos": "supply"}
+
+    # Now make supply_node_set raise to break the next set() on vneg.
+    backend = supply.device.backend
+    original_node_set = backend.supply_node_set
+    call_count = {"n": 0}
+    def boom_on_second_call(channel, node, value):
+        call_count["n"] += 1
+        if call_count["n"] >= 1:  # fail on the very first call inside the new set()
+            raise RuntimeError("backend on fire")
+        original_node_set(channel, node, value)
+    monkeypatch.setattr(backend, "supply_node_set", boom_on_second_call)
+
+    with pytest.raises(RuntimeError):
+        supply.set(channel="vneg", voltage=-3.0, current_limit=0.4)
+
+    # vpos preserved.
+    assert supply.device.allocator.claimed_pins() == {"vpos": "supply"}
+    assert supply._setpoints.get("vpos") == {"voltage": 2.5, "current_limit": 0.3}  # noqa: SLF001
+    # vneg rolled back.
+    assert "vneg" not in supply._setpoints  # noqa: SLF001
+
+
+def test_set_failure_restores_prior_setpoint_on_reset_of_same_channel(
+    supply: Supply, monkeypatch
+) -> None:
+    """A failed re-set() of an existing channel must restore the original setpoint."""
+    supply.set(channel="vpos", voltage=2.5, current_limit=0.3)
+
+    backend = supply.device.backend
+    def boom_node_set(channel, node, value):
+        raise RuntimeError("backend on fire")
+    monkeypatch.setattr(backend, "supply_node_set", boom_node_set)
+
+    with pytest.raises(RuntimeError):
+        supply.set(channel="vpos", voltage=5.0, current_limit=1.0)
+
+    # Original setpoint preserved.
+    assert supply._setpoints["vpos"] == {"voltage": 2.5, "current_limit": 0.3}  # noqa: SLF001
+    # vpos still claimed (was claimed before, should stay claimed).
+    assert supply.device.allocator.claimed_pins() == {"vpos": "supply"}
