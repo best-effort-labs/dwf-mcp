@@ -229,3 +229,40 @@ class PydwfBackend(DwfBackend):
     def supply_master_enable(self, enabled: bool) -> None:
         self._analog_io.enableSet(enabled)
         self._analog_io.configure()
+
+    # --- I2C (ProtocolI2C) --------------------------------------------------
+
+    @property
+    def _i2c(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.protocol.i2c
+
+    def i2c_configure(self, scl_pin_idx: int, sda_pin_idx: int, rate_hz: float,
+                      stretch: bool, timeout_s: float) -> None:
+        i2c = self._i2c
+        i2c.sclSet(scl_pin_idx)
+        i2c.sdaSet(sda_pin_idx)
+        i2c.rateSet(rate_hz)
+        i2c.stretchSet(1 if stretch else 0)
+        i2c.timeoutSet(timeout_s)
+
+    def i2c_reset(self) -> None:
+        self._i2c.reset()
+
+    def i2c_write(self, address: int, data: bytes) -> int:
+        # pydwf FDwfDigitalI2cWrite expects an 8-bit address (7-bit addr << 1).
+        return int(self._i2c.write(address << 1, list(data)))
+
+    def i2c_read(self, address: int, length: int) -> bytes:
+        # Returns Tuple[int, List[int]]: (nak, data).
+        _nak, rx = self._i2c.read(address << 1, length)
+        return bytes(rx)
+
+    def i2c_write_read(self, address: int, write_data: bytes, read_length: int) -> bytes:
+        # Returns Tuple[int, List[int]]: (nak, data).
+        _nak, rx = self._i2c.writeRead(address << 1, list(write_data), read_length)
+        return bytes(rx)
+
+    def i2c_write_one(self, address: int, byte: int) -> int:
+        return int(self._i2c.writeOne(address << 1, byte))
