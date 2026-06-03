@@ -20,6 +20,7 @@ from dwf_mcp.devices.ad3 import (
     AD3_TRIGGER_PINS,
 )
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
+from dwf_mcp.instruments.scope import Scope
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 from dwf_mcp.registry import InstrumentRegistry
 
@@ -183,7 +184,9 @@ def build_app(
         idle_timeout_s=idle_timeout_s,
     )
     registry = InstrumentRegistry()
-    return DwfMcpApp(device, registry)
+    app = DwfMcpApp(device, registry)
+    app.register_instrument(Scope)
+    return app
 
 
 def main() -> None:

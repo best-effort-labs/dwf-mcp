@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+import numpy as np
 import pytest
 
 from dwf_mcp.artifacts import ArtifactWriter
@@ -147,3 +148,28 @@ async def test_safety_log_writes_to_workspace_dir_after_open(tmp_path) -> None:
     assert log_path.exists(), f"expected safety log at {log_path}, got files: {files}"
     content = log_path.read_text()
     assert "supply_enable" in content
+
+
+@pytest.mark.asyncio
+async def test_scope_configure_capture_close_flow(tmp_path) -> None:
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    app.device.backend.set_scope_canned_data(  # type: ignore[attr-defined]
+        {1: np.linspace(-1, 1, 512, dtype=np.float64)}
+    )
+    await app.call_tool("waveforms.open", {})
+    cfg = await app.call_tool("scope.configure", {
+        "channels": [1], "range_v": 5.0, "sample_rate_hz": 1_000_000, "buffer_size": 512,
+    })
+    assert cfg == {"configured": True}
+    cap = await app.call_tool("scope.capture", {})
+    assert "path" in cap
+    assert "ch1" in cap["summary"]
+    await app.call_tool("waveforms.close", {})
+
+
+@pytest.mark.asyncio
+async def test_scope_capture_before_configure_returns_error(tmp_path) -> None:
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    result = await app.call_tool("scope.capture", {})
+    assert result["error"]["type"] == "InstrumentNotConfigured"
