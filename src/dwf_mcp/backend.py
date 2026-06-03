@@ -95,3 +95,80 @@ class DwfBackend(ABC):
 
     def i2c_write_one(self, address: int, byte: int) -> int:
         raise NotImplementedError
+
+    # AWG (AnalogOut) — added in stage 3a.
+    def awg_configure(
+        self, channel: int, function: str, freq_hz: float,
+        amplitude_v: float, offset_v: float, phase_deg: float,
+        symmetry: float, run_time_s: float | None,
+    ) -> None:
+        raise NotImplementedError
+
+    def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
+        raise NotImplementedError
+
+    def awg_start(self, channel: int) -> None:
+        raise NotImplementedError
+
+    def awg_stop(self, channel: int) -> None:
+        raise NotImplementedError
+
+    # Pattern (DigitalOut) — added in stage 3a.
+    def pattern_configure(
+        self, pin_idx: int, function: str, freq_hz: float,
+        duty: float, idle_state: str,
+    ) -> None:
+        raise NotImplementedError
+
+    def pattern_start(self, pin_idx: int) -> None:
+        raise NotImplementedError
+
+    def pattern_stop(self, pin_idx: int) -> None:
+        raise NotImplementedError
+
+    # DIO (DigitalIO) — added in stage 3a.
+    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
+        raise NotImplementedError
+
+    def dio_set(self, pin_idx: int, state: bool) -> None:
+        raise NotImplementedError
+
+    def dio_read(self, pin_idx: int) -> bool:
+        raise NotImplementedError
+
+    # Logic buffer-mode (DigitalIn) — added in stage 3a.
+    def logic_configure(
+        self, pin_mask: int, sample_rate_hz: float, buffer_size: int
+    ) -> None:
+        raise NotImplementedError
+
+    def logic_set_trigger(
+        self, source: str, pin_idx: int | None, level: float | None,
+        condition: str | None, position_s: float | None, timeout_s: float | None,
+    ) -> None:
+        raise NotImplementedError
+
+    def logic_arm(self) -> None:
+        raise NotImplementedError
+
+    def logic_status(self) -> str:
+        raise NotImplementedError
+
+    def logic_read(self, count: int) -> np.ndarray:
+        raise NotImplementedError
+
+    # Logic record-mode (DigitalIn streaming) — added in stage 3a.
+    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float) -> None:
+        raise NotImplementedError
+
+    def logic_record_arm(self) -> None:
+        raise NotImplementedError
+
+    def logic_record_status(self) -> tuple[int, int, int]:
+        raise NotImplementedError
+
+    def logic_record_read(self, count: int) -> np.ndarray:
+        raise NotImplementedError
+
+    def logic_record_stop(self) -> None:
+        raise NotImplementedError

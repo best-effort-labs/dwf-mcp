@@ -95,7 +95,10 @@ class DwfMcpApp:
         async def handler(**kwargs: Any) -> Any:
             instrument = self._get_or_create_instrument(instrument_name)
             method = getattr(instrument, method_name)
-            return method(**kwargs)
+            result = method(**kwargs)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         return handler
 
     def _get_or_create_instrument(self, name: str) -> Instrument:

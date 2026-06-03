@@ -38,6 +38,22 @@ class FakeBackend(DwfBackend):
         self.i2c_calls: list[tuple[str, dict[str, Any]]] = []
         self._i2c_acks: dict[int, bool] = {}
         self._i2c_reads: dict[int, bytes] = {}
+        # AWG (AnalogOut) state
+        self.awg_calls: list[tuple[str, dict[str, Any]]] = []
+        # Pattern (DigitalOut) state
+        self.pattern_calls: list[tuple[str, dict[str, Any]]] = []
+        # DIO (DigitalIO) state
+        self.dio_calls: list[tuple[str, dict[str, Any]]] = []
+        self._dio_pin_values: dict[int, bool] = {}
+        # Logic buffer-mode state
+        self.logic_calls: list[tuple[str, dict[str, Any]]] = []
+        self._logic_status_sequence: list[str] = ["Done"]
+        self._logic_status_idx = 0
+        self._logic_canned_data: np.ndarray = np.zeros((0, 16), dtype=np.uint8)
+        # Logic record-mode state
+        self._logic_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
+        self._logic_record_status_idx = 0
+        self._logic_record_canned_chunk: np.ndarray = np.zeros((10, 16), dtype=np.uint8)
 
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
@@ -164,3 +180,121 @@ class FakeBackend(DwfBackend):
 
     def set_i2c_reads(self, reads: dict[int, bytes]) -> None:
         self._i2c_reads = dict(reads)
+
+    # --- AWG (AnalogOut) ---
+
+    def awg_configure(
+        self, channel: int, function: str, freq_hz: float,
+        amplitude_v: float, offset_v: float, phase_deg: float,
+        symmetry: float, run_time_s: float | None,
+    ) -> None:
+        self.awg_calls.append(("configure", {
+            "channel": channel, "function": function, "freq_hz": freq_hz,
+            "amplitude_v": amplitude_v, "offset_v": offset_v,
+            "phase_deg": phase_deg, "symmetry": symmetry, "run_time_s": run_time_s,
+        }))
+
+    def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
+        self.awg_calls.append(("upload_custom", {"channel": channel, "n_samples": len(samples)}))
+
+    def awg_start(self, channel: int) -> None:
+        self.awg_calls.append(("start", {"channel": channel}))
+
+    def awg_stop(self, channel: int) -> None:
+        self.awg_calls.append(("stop", {"channel": channel}))
+
+    # --- Pattern (DigitalOut) ---
+
+    def pattern_configure(
+        self, pin_idx: int, function: str, freq_hz: float,
+        duty: float, idle_state: str,
+    ) -> None:
+        self.pattern_calls.append(("configure", {
+            "pin_idx": pin_idx, "function": function, "freq_hz": freq_hz,
+            "duty": duty, "idle_state": idle_state,
+        }))
+
+    def pattern_start(self, pin_idx: int) -> None:
+        self.pattern_calls.append(("start", {"pin_idx": pin_idx}))
+
+    def pattern_stop(self, pin_idx: int) -> None:
+        self.pattern_calls.append(("stop", {"pin_idx": pin_idx}))
+
+    # --- DIO (DigitalIO) ---
+
+    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
+        self.dio_calls.append(("set_direction", {"pin_idx": pin_idx, "output": output}))
+
+    def dio_set(self, pin_idx: int, state: bool) -> None:
+        self._dio_pin_values[pin_idx] = state
+        self.dio_calls.append(("set", {"pin_idx": pin_idx, "state": state}))
+
+    def dio_read(self, pin_idx: int) -> bool:
+        return self._dio_pin_values.get(pin_idx, False)
+
+    # --- Logic buffer-mode (DigitalIn) ---
+
+    def logic_configure(
+        self, pin_mask: int, sample_rate_hz: float, buffer_size: int
+    ) -> None:
+        self.logic_calls.append(("configure", {
+            "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz, "buffer_size": buffer_size,
+        }))
+        self._logic_status_idx = 0
+
+    def logic_set_trigger(
+        self, source: str, pin_idx: int | None, level: float | None,
+        condition: str | None, position_s: float | None, timeout_s: float | None,
+    ) -> None:
+        self.logic_calls.append(("set_trigger", {
+            "source": source, "pin_idx": pin_idx, "level": level,
+            "condition": condition, "position_s": position_s, "timeout_s": timeout_s,
+        }))
+
+    def logic_arm(self) -> None:
+        self.logic_calls.append(("arm", {}))
+
+    def logic_status(self) -> str:
+        idx = min(self._logic_status_idx, len(self._logic_status_sequence) - 1)
+        result = self._logic_status_sequence[idx]
+        self._logic_status_idx += 1
+        return result
+
+    def logic_read(self, count: int) -> np.ndarray:
+        if len(self._logic_canned_data) >= count:
+            return self._logic_canned_data[:count]
+        return np.zeros((count, 16), dtype=np.uint8)
+
+    # --- Logic record-mode ---
+
+    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float) -> None:
+        self.logic_calls.append(("record_configure", {
+            "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz,
+        }))
+        self._logic_record_status_idx = 0
+
+    def logic_record_arm(self) -> None:
+        self.logic_calls.append(("record_arm", {}))
+
+    def logic_record_status(self) -> tuple[int, int, int]:
+        idx = min(self._logic_record_status_idx, len(self._logic_record_status_sequence) - 1)
+        result = self._logic_record_status_sequence[idx]
+        self._logic_record_status_idx += 1
+        return result
+
+    def logic_record_read(self, count: int) -> np.ndarray:
+        return self._logic_record_canned_chunk[:count]
+
+    def logic_record_stop(self) -> None:
+        self.logic_calls.append(("record_stop", {}))
+
+    # Test helpers for logic
+    def set_logic_status_sequence(self, sequence: list[str]) -> None:
+        self._logic_status_sequence = list(sequence)
+        self._logic_status_idx = 0
+
+    def set_logic_record_status_sequence(
+        self, sequence: list[tuple[int, int, int]]
+    ) -> None:
+        self._logic_record_status_sequence = list(sequence)
+        self._logic_record_status_idx = 0
