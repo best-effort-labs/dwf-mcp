@@ -173,3 +173,27 @@ async def test_scope_capture_before_configure_returns_error(tmp_path) -> None:
     await app.call_tool("waveforms.open", {})
     result = await app.call_tool("scope.capture", {})
     assert result["error"]["type"] == "InstrumentNotConfigured"
+
+
+@pytest.mark.asyncio
+async def test_supply_set_enable_read_disable_flow(tmp_path) -> None:
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {"supply_max_voltage_pos": 3.3})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0, "current_limit": 0.4})
+    enable_result = await app.call_tool("supply.enable", {"channel": "vpos"})
+    assert enable_result == {"enabled": True, "channel": "vpos"}
+    read_result = await app.call_tool("supply.read", {"channel": "vpos"})
+    assert read_result["enabled"] is True
+    assert read_result["requested"]["voltage"] == 3.0
+    await app.call_tool("supply.disable", {"channel": "vpos"})
+    await app.call_tool("waveforms.close", {})
+
+
+@pytest.mark.asyncio
+async def test_supply_enable_above_cap_returns_safety_error(tmp_path) -> None:
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {"supply_max_voltage_pos": 3.3})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 5.0})
+    result = await app.call_tool("supply.enable", {"channel": "vpos"})
+    assert result["error"]["type"] == "SafetyViolation"
+    assert "5.0" in result["error"]["message"]

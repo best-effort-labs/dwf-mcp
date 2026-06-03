@@ -21,6 +21,7 @@ from dwf_mcp.devices.ad3 import (
 )
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.instruments.scope import Scope
+from dwf_mcp.instruments.supply import Supply
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 from dwf_mcp.registry import InstrumentRegistry
 
@@ -186,6 +187,7 @@ def build_app(
     registry = InstrumentRegistry()
     app = DwfMcpApp(device, registry)
     app.register_instrument(Scope)
+    app.register_instrument(Supply)
     return app
 
 
