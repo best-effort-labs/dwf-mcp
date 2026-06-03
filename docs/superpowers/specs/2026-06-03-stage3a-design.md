@@ -80,39 +80,43 @@ awg_stop(channel)
 
 ```
 logic.configure(pins, sample_rate_hz, buffer_size)
-logic.set_trigger(source, pin?, level?, condition?, position_s?, timeout_s?, trig_in_pin?, trig_out_pin?)
+logic.set_trigger(source, pin?, level?, condition?, position_s?, timeout_s?)
 logic.capture(output_path?, format="npz"|"vcd")
 logic.record_start(pins, sample_rate_hz, duration_s, output_path?, format="npz"|"vcd")
 logic.record_status(record_id)
 logic.record_stop(record_id)
 ```
 
-`pins` is a list of DIO pin names (e.g. `["dio0", "dio1"]`). `format` defaults to `"npz"`.
+`pins` is a list of DIO pin names (e.g. `["dio0", "dio1"]`). `format` defaults to `"npz"`. `source` for `set_trigger` is one of `"none"`, `"detector_digital_in"`, `"external1"` (T1), `"external2"` (T2). Trigger output routing is deferred to a later stage; use the external trigger pins as inputs only in 3a.
 
-`record_start` is a standalone path — it does not require a prior `logic.configure` call. It configures `DigitalIn` for record mode internally and returns a `record_id` immediately. Buffer-mode (`logic.configure` → `logic.capture`) and streaming (`logic.record_start`) are independent tool paths that cannot be active simultaneously on the same instrument instance.
+`record_start` is a standalone path — it does not require a prior `logic.configure` call. It configures `DigitalIn` for record mode internally, claims `pins`, and returns a `record_id` immediately. Buffer-mode (`logic.configure` → `logic.capture`) and streaming (`logic.record_start`) are independent tool paths that cannot be active simultaneously on the same instrument instance.
 
 ### Buffer-mode path (`logic.capture`)
 
 Mirrors scope lifecycle exactly: configure arms `DigitalIn`, set_trigger configures trigger, capture polls `DigitalIn.status(readData=True)` until `DwfState.Done`, reads samples, writes artifact.
 
+**Pin allocation:** `logic.configure(pins, ...)` calls `allocator.claim("logic", pins)`. Partial-failure rollback: if any backend call raises, release the claim and leave instance state as unconfigured (same pattern as Scope). `record_start` also claims its `pins` list via `allocator.claim("logic", pins)`, replacing any prior buffer-mode claim. Both paths share the same allocator slot (`"logic"`).
+
 **Artifact formats:**
 
 - `"npz"`: `ArtifactWriter.write_npz` with a uint8 array of shape `(n_samples, n_pins)`, pin names in config sidecar. Same writer as scope.
-- `"vcd"`: calls `vcd_writer.write(path, samples, pin_names, sample_rate_hz)`. If `vcd` package is not installed, raises with message: `"VCD format requires the 'vcd' package: pip install dwf-mcp[vcd]"`.
+- `"vcd"`: calls `vcd_writer.write(path, samples, pin_names, sample_rate_hz)`. If `pyvcd` package is not installed, raises with message: `"VCD format requires the 'pyvcd' package: pip install dwf-mcp[vcd]"`.
 
 ### VCD optional extra
 
 `pyproject.toml` additions — add `vcd` as a new optional extra and merge it into the existing `dev` extra:
 ```toml
 [project.optional-dependencies]
-vcd = ["vcd"]
-dev = ["pytest", "ruff", "mypy", "vcd", ...]  # add "vcd" to existing dev list
+vcd = ["pyvcd"]
+dev = ["pytest", "ruff", "mypy", "pyvcd", ...]  # add "pyvcd" to existing dev list
 ```
+
+The PyPI package is `pyvcd`; the import name is `vcd` (`from vcd import VCDWriter`).
 
 In `logic.py`:
 ```python
 try:
-    import vcd as _vcd_pkg
+    import vcd as _vcd_pkg  # installed as pyvcd
     HAS_VCD = True
 except ImportError:
     HAS_VCD = False
@@ -120,7 +124,7 @@ except ImportError:
 
 ### VCD writer (`dwf_mcp/vcd_writer.py`)
 
-Thin module (~50 lines) wrapping the `vcd` package. Takes `path: Path`, `samples: np.ndarray` (uint8, shape `(n_samples, n_pins)`), `pin_names: list[str]`, `sample_rate_hz: float`. Computes timescale from sample rate, iterates transitions, writes VCD file. Accompanied by `test_vcd_writer.py` that round-trips a synthetic array through the writer and verifies output with the `vcd` reader.
+Thin module (~50 lines) wrapping the `pyvcd` package (`import vcd`). Takes `path: Path`, `samples: np.ndarray` (uint8, shape `(n_samples, n_pins)`), `pin_names: list[str]`, `sample_rate_hz: float`. Computes timescale from sample rate, iterates transitions, writes VCD file. Accompanied by `test_vcd_writer.py` that round-trips a synthetic array through the writer and verifies output with the `vcd` reader.
 
 ### Streaming path (`logic.record_start` / `_status` / `_stop`)
 
@@ -146,35 +150,63 @@ The loop is a coroutine method on `Logic` (not a free function), so it accesses 
 
 ```python
 async def _record_loop(self, session: _RecordingSession) -> None:
-    while not session.done:
-        await asyncio.sleep(0.010)  # 10ms poll
-        available, lost, remaining = self.device.backend.logic_record_status()
-        session.lost_samples += lost
-        if available > 0:
-            chunk = self.device.backend.logic_record_read(available)
-            session.chunks.append(chunk)
-            await session.queue.put(chunk)
-        if remaining == 0:
-            session.done = True
+    try:
+        while not session.done:
+            await asyncio.sleep(0.010)  # 10ms poll
+            available, lost, remaining = self.device.backend.logic_record_status()
+            session.lost_samples += lost
+            if available > 0:
+                chunk = self.device.backend.logic_record_read(available)
+                session.chunks.append(chunk)
+                await session.queue.put(chunk)
+            if remaining == 0:
+                session.done = True
+    except asyncio.CancelledError:
+        raise  # propagate normally — cancellation is not an error
+    except Exception as exc:
+        session.error = str(exc)
+        session.done = True
 ```
+
+`record_status` response shape: `{"record_id": str, "done": bool, "chunks_received": int, "lost_samples": int, "error": str | None}`. If `error` is non-null, the session failed; `record_stop` should still be called to clean up and write whatever data was accumulated.
+
+#### `record_stop` sequence
+
+1. Cancel the background task (`task.cancel()`, `await task` with `suppress(CancelledError)`)
+2. Stop hardware acquisition: `backend.logic_record_stop()` (disarms `DigitalIn`)
+3. Drain any remaining available samples from device with `logic_record_status()` + `logic_record_read()`
+4. Write artifact (best-effort: if artifact writing fails, log the exception, include `"artifact_error"` in the response, do not raise — data loss at write time should not hide that recording completed)
+5. Remove session from `self._sessions`
+6. Release pin claim: `allocator.release("logic")`
+7. Return `{"record_id": str, "artifact_path": str | None, "lost_samples": int, "error": str | None, "artifact_error": str | None}`
 
 #### Session storage
 
-`self._sessions: dict[str, _RecordingSession]` on the `Logic` instance. `record_stop` cancels the task, drains remaining data, writes artifact, removes session from dict.
+`self._sessions: dict[str, _RecordingSession]` on the `Logic` instance.
 
 #### Backend surface
 
+Buffer-mode and record-mode use separate configure calls because they set different `DigitalIn` acquisition modes (`Single` vs `Record`) and have different parameter shapes.
+
 ```python
-logic_configure(pins: list[int], sample_rate_hz, buffer_size)
+# Buffer mode
+logic_configure(pin_mask: int, sample_rate_hz: float, buffer_size: int)
+    # Sets acquisition mode=Single, sample rate, buffer size, enables channels
 logic_set_trigger(source, pin_idx?, level?, condition?, position_s?, timeout_s?)
-logic_arm()
-logic_status() -> str
-logic_read(count) -> np.ndarray          # buffer-mode read
-logic_record_status() -> tuple[int, int, int]   # available, lost, remaining
-logic_record_read(count) -> np.ndarray   # streaming chunk read
+logic_arm()                              # DigitalIn.configure(reconfigure=False, start=True)
+logic_status() -> str                    # "Done", "Armed", "Triggered", etc.
+logic_read(count: int) -> np.ndarray     # shape (count, 16), uint8
+
+# Record mode
+logic_record_configure(pin_mask: int, sample_rate_hz: float)
+    # Sets acquisition mode=Record, sample rate; no buffer_size (record mode uses streaming)
+logic_record_arm()                       # starts record acquisition
+logic_record_status() -> tuple[int, int, int]   # available, lost, remaining samples
+logic_record_read(count: int) -> np.ndarray     # shape (count, 16), uint8 chunk
+logic_record_stop()                      # aborts acquisition, disarms DigitalIn
 ```
 
-Note: `pins` passed to backend are integer DIO indices (0–15); pin name→index translation happens in the instrument layer.
+Note: `pin_mask` is an integer bitmask (bit N = DIO pin N); pin name→mask translation happens in the instrument layer. `logic_read` and `logic_record_read` always return all 16 channels; the instrument layer slices to the configured pins before writing the artifact.
 
 ---
 
@@ -227,18 +259,26 @@ dio.read(pin) -> int
 
 `dio.set` and `dio.read` claim the pin, perform the operation, release the pin — all within a single call. If the pin is held by another instrument at call time, `PinAllocationError` is raised immediately before touching hardware.
 
-`dio.set_direction` does not claim a pin; it only updates `self._directions: dict[str, str]`. Direction persists across calls.
+`dio.set_direction` is **purely local** — it only updates `self._directions: dict[str, str]` and does **not** touch hardware or claim the pin. This prevents `set_direction` from mutating shared `DigitalIO` state while the pin is owned by Pattern, Logic, or another instrument. The hardware direction register is written inside `dio.set` / `dio.read`, after the pin claim succeeds.
+
+Call sequence for `dio.set(pin, state)`:
+1. Check `self._directions[pin] == "out"` (raises `ValueError` if wrong)
+2. `allocator.claim("dio", [pin])` (raises `PinAllocationError` if held elsewhere)
+3. `backend.dio_set_direction(pin_idx, output=True)` + `backend.dio_set(pin_idx, state)`
+4. `allocator.release("dio")`
+
+`dio.read(pin)` mirrors this with `output=False` and `backend.dio_read`.
 
 ### Defaults and validation
 
-If `set_direction` has not been called for a pin, default direction is `"in"` (safe). `dio.set` on an `"in"`-direction pin raises `ValueError`. `dio.read` on an `"out"`-direction pin raises `ValueError`.
+If `set_direction` has not been called for a pin, default direction is `"in"` (safe). `dio.set` on an `"in"`-direction pin raises `ValueError` before attempting the claim.
 
 ### Backend surface
 
 ```python
-dio_set_direction(pin_idx, output: bool)
-dio_set(pin_idx, state: bool)
-dio_read(pin_idx) -> bool
+dio_set_direction(pin_idx: int, output: bool)  # called inside set/read after claim
+dio_set(pin_idx: int, state: bool)
+dio_read(pin_idx: int) -> bool
 ```
 
 ---
@@ -250,12 +290,12 @@ dio_read(pin_idx) -> bool
 | File | Key cases |
 |---|---|
 | `test_awg.py` | Configure/start/stop state machine; safety gate rejection; partial-failure rollback; `upload_custom` shape validation |
-| `test_logic.py` | Buffer-mode capture cycle; npz artifact written; VCD invoked when `format="vcd"`; `ImportError` on missing `vcd` package (monkeypatch `HAS_VCD=False`); `_RecordingSession` lifecycle; lost-sample counter |
+| `test_logic.py` | Buffer-mode capture cycle with pin claim/release; npz artifact written; VCD invoked when `format="vcd"`; `ImportError` on missing `pyvcd` (monkeypatch `HAS_VCD=False`); `record_start` claims pins; `_RecordingSession` lifecycle (start/status/stop); lost-sample counter propagated; backend exception in loop sets `session.error` and `done=True`; `record_stop` calls `logic_record_stop()` before artifact write |
 | `test_pattern.py` | Configure/start/stop; `SafetyViolation` on wrong voltage; per-pin claim accumulation |
-| `test_dio.py` | Default direction is `"in"`; `PinAllocationError` if pin claimed elsewhere; `set` on `"in"` pin raises; transient claim/release |
-| `test_vcd_writer.py` | Synthetic array round-trip through writer + vcd reader; timescale correct |
+| `test_dio.py` | Default direction is `"in"`; `PinAllocationError` if pin claimed elsewhere; `set` on `"in"` pin raises before claim attempt; `set_direction` does not touch hardware; hardware direction applied inside `set`/`read` after claim |
+| `test_vcd_writer.py` | Synthetic array round-trip through writer + pyvcd reader; timescale correct |
 
-`FakeBackend` gets all new backend methods using the existing `record_call` + canned-response pattern. `logic_status()` returns `"Done"` after first call.
+`FakeBackend` gets all new backend methods using the existing `record_call` + canned-response pattern. `logic_status()` returns `"Done"` after first call. `logic_record_status()` returns `(n, 0, 0)` on final call (remaining=0 terminates the loop).
 
 ### Hardware smoke tests
 
