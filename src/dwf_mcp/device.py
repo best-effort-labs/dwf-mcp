@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Any
 from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfDeviceLost
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
+
+log = logging.getLogger(__name__)
 
 
 class DwfDevice:
@@ -23,6 +26,7 @@ class DwfDevice:
         self.backend = backend
         self.policy = policy
         self.allocator = allocator
+        self._workspace_raw = str(workspace)
         self.workspace = Path(workspace)
         self.idle_timeout_s = idle_timeout_s
         self._info: DeviceInfo | None = None
@@ -91,31 +95,55 @@ class DwfDevice:
         if kind == "supply_enable":
             channel = params.get("channel")
             voltage = params.get("voltage")
+            if not isinstance(channel, str):
+                raise SafetyViolation(
+                    f"supply_enable requires str channel, got {type(channel).__name__}"
+                )
+            if not isinstance(voltage, int | float):
+                raise SafetyViolation(
+                    f"supply_enable requires numeric voltage, got {type(voltage).__name__}"
+                )
+            self.policy.check_supply_voltage(channel, float(voltage))
             current_limit = params.get("current_limit")
-            if isinstance(channel, str) and isinstance(voltage, int | float):
-                self.policy.check_supply_voltage(channel, float(voltage))
-            if isinstance(current_limit, int | float):
+            if current_limit is not None:
+                if not isinstance(current_limit, int | float):
+                    raise SafetyViolation(
+                        f"supply_enable current_limit must be numeric if given, "
+                        f"got {type(current_limit).__name__}"
+                    )
                 self.policy.check_supply_current(float(current_limit))
         elif kind == "awg_start":
             amplitude = params.get("amplitude")
-            if isinstance(amplitude, int | float):
-                self.policy.check_awg_amplitude(float(amplitude))
+            if not isinstance(amplitude, int | float):
+                raise SafetyViolation(
+                    f"awg_start requires numeric amplitude, got {type(amplitude).__name__}"
+                )
+            self.policy.check_awg_amplitude(float(amplitude))
         # Unknown kinds pass through (forward-compat for stage 3 kinds).
 
     def _append_safety_log(
         self, kind: str, params: dict[str, Any], rejected: bool, reason: str | None
     ) -> None:
-        path = self.workspace / "dwf-safety.log"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "ts": datetime.now(UTC).isoformat(),
-            "kind": kind,
-            "params": params,
-            "rejected": rejected,
-            "reason": reason,
-        }
-        with path.open("a") as f:
-            f.write(json.dumps(entry, default=str) + "\n")
+        try:
+            if self._workspace_raw == "":
+                log.info(
+                    "safety event (no workspace): kind=%s params=%s rejected=%s reason=%s",
+                    kind, params, rejected, reason,
+                )
+                return
+            path = self.workspace / "dwf-safety.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "ts": datetime.now(UTC).isoformat(),
+                "kind": kind,
+                "params": params,
+                "rejected": rejected,
+                "reason": reason,
+            }
+            with path.open("a") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception:
+            log.exception("failed to write safety log entry for kind=%r", kind)
 
     def status(self) -> dict[str, Any]:
         idle_remaining: float | None = None

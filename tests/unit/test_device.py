@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio  # noqa: F401
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -163,3 +164,105 @@ def test_gate_output_unknown_kind_passes_through(tmp_path) -> None:
     log_lines = (tmp_path / "dwf-safety.log").read_text().splitlines()
     lines = [json.loads(line) for line in log_lines if line.strip()]
     assert lines[-1]["kind"] == "future_kind"
+
+
+def test_gate_output_supply_enable_missing_channel_raises(tmp_path) -> None:
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(supply_max_voltage_pos=3.3),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    with pytest.raises(SafetyViolation) as exc:
+        device.gate_output("supply_enable", voltage=3.0)
+    assert "channel" in str(exc.value)
+
+
+def test_gate_output_supply_enable_missing_voltage_raises(tmp_path) -> None:
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    with pytest.raises(SafetyViolation) as exc:
+        device.gate_output("supply_enable", channel="pos")
+    assert "voltage" in str(exc.value)
+
+
+def test_gate_output_supply_enable_bad_current_limit_raises(tmp_path) -> None:
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    with pytest.raises(SafetyViolation):
+        device.gate_output(
+            "supply_enable", channel="pos", voltage=3.0, current_limit="not-a-number"
+        )
+
+
+def test_gate_output_awg_start_missing_amplitude_raises(tmp_path) -> None:
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    with pytest.raises(SafetyViolation) as exc:
+        device.gate_output("awg_start")
+    assert "amplitude" in str(exc.value)
+
+
+def test_gate_output_log_failure_does_not_mask_safety_violation(tmp_path, monkeypatch) -> None:
+    """If the safety log file write fails, the in-flight SafetyViolation must still propagate."""
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(supply_max_voltage_pos=3.3),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    # Make any file open fail with IOError.
+    original_open = Path.open
+    def boom_open(self, *args, **kwargs):
+        raise OSError("disk on fire")
+    monkeypatch.setattr(Path, "open", boom_open)
+    with pytest.raises(SafetyViolation):
+        device.gate_output("supply_enable", channel="pos", voltage=5.0)
+    monkeypatch.setattr(Path, "open", original_open)
+
+
+def test_gate_output_with_empty_workspace_does_not_crash(caplog) -> None:
+    """Empty workspace falls back to logger-only audit; doesn't crash, doesn't write CWD."""
+    import logging
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(supply_max_voltage_pos=3.3),
+        allocator=PinAllocator(),
+        workspace="",
+        idle_timeout_s=60,
+    )
+    with caplog.at_level(logging.INFO, logger="dwf_mcp.device"):
+        device.gate_output("supply_enable", channel="pos", voltage=3.0)
+    # The audit went to the logger, not a file.
+    assert any("safety event (no workspace)" in r.message for r in caplog.records)
+
+
+def test_gate_output_supply_neg_over_cap_raises(tmp_path) -> None:
+    """Symmetry: neg channel also enforced."""
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(supply_max_voltage_neg=-3.3),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    device.gate_output("supply_enable", channel="neg", voltage=-3.0)  # within cap
+    with pytest.raises(SafetyViolation):
+        device.gate_output("supply_enable", channel="neg", voltage=-5.0)
