@@ -176,3 +176,56 @@ class PydwfBackend(DwfBackend):
 
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
         return np.asarray(self._analog_in.statusData(channel - 1, count), dtype=np.float64)
+
+    # --- Supply (AnalogIO) --------------------------------------------------
+
+    @property
+    def _analog_io(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.analogIO
+
+    def supply_discover_nodes(self) -> dict[str, tuple[int, dict[str, int]]]:
+        aio = self._analog_io
+        aio.reset()
+        layout: dict[str, tuple[int, dict[str, int]]] = {}
+        ch_count = aio.channelCount()
+        for ch_idx in range(ch_count):
+            # channelName returns (name, label) per pydwf docs; [0] is the long name.
+            ch_name = aio.channelName(ch_idx)[0].lower()
+            # Map AD3 supply channel labels to our rail names.
+            rail: str | None = None
+            if "v+" in ch_name or "positive" in ch_name or "vpos" in ch_name:
+                rail = "vpos"
+            elif "v-" in ch_name or "negative" in ch_name or "vneg" in ch_name:
+                rail = "vneg"
+            if rail is None:
+                continue
+            node_count = aio.channelInfo(ch_idx)  # returns int directly
+            nodes: dict[str, int] = {}
+            for node_idx in range(node_count):
+                # channelNodeName returns (name, units) per pydwf docs; [0] is the name.
+                node_name = aio.channelNodeName(ch_idx, node_idx)[0].lower()
+                if "enable" in node_name:
+                    nodes["enable"] = node_idx
+                elif "voltage" in node_name:
+                    nodes["voltage"] = node_idx
+                elif "current" in node_name:
+                    nodes["current"] = node_idx
+            if {"enable", "voltage"} <= set(nodes.keys()):
+                layout[rail] = (ch_idx, nodes)
+        if not layout:
+            raise DwfBackendError("could not discover supply layout on AnalogIO")
+        return layout
+
+    def supply_node_set(self, channel: int, node: int, value: float) -> None:
+        self._analog_io.channelNodeSet(channel, node, value)
+
+    def supply_node_get(self, channel: int, node: int) -> float:
+        aio = self._analog_io
+        aio.status()  # refresh
+        return float(aio.channelNodeStatus(channel, node))
+
+    def supply_master_enable(self, enabled: bool) -> None:
+        self._analog_io.enableSet(enabled)
+        self._analog_io.configure()
