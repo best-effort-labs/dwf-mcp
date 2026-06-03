@@ -26,6 +26,14 @@ class FakeBackend(DwfBackend):
         self._scope_canned: dict[int, np.ndarray[Any, Any]] = {}
         self._scope_status_sequence: list[str] = ["Done"]
         self._scope_status_idx = 0
+        # Supply (AnalogIO) state
+        self.supply_calls: list[tuple[str, dict[str, Any]]] = []
+        self._supply_layout: dict[str, tuple[int, dict[str, int]]] = {
+            "vpos": (0, {"enable": 0, "voltage": 1, "current": 2}),
+            "vneg": (1, {"enable": 0, "voltage": 1, "current": 2}),
+        }
+        self._supply_setpoints: dict[tuple[int, int], float] = {}
+        self._supply_canned_status: dict[tuple[int, int], float] = {}
 
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
@@ -93,3 +101,24 @@ class FakeBackend(DwfBackend):
 
     def simulate_unplug(self) -> None:
         self._open_info = None
+
+    # --- Supply (AnalogIO) ---
+
+    def supply_discover_nodes(self) -> dict[str, tuple[int, dict[str, int]]]:
+        return {k: (ch, dict(nodes)) for k, (ch, nodes) in self._supply_layout.items()}
+
+    def supply_node_set(self, channel: int, node: int, value: float) -> None:
+        self._supply_setpoints[(channel, node)] = value
+        self.supply_calls.append(("node_set", {"channel": channel, "node": node, "value": value}))
+
+    def supply_node_get(self, channel: int, node: int) -> float:
+        if (channel, node) in self._supply_canned_status:
+            return self._supply_canned_status[(channel, node)]
+        return self._supply_setpoints.get((channel, node), 0.0)
+
+    def supply_master_enable(self, enabled: bool) -> None:
+        self.supply_calls.append(("master_enable", {"enabled": enabled}))
+
+    # Test helpers
+    def set_supply_canned_status(self, values: dict[tuple[int, int], float]) -> None:
+        self._supply_canned_status = dict(values)

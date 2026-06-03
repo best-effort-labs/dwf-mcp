@@ -93,3 +93,42 @@ def test_scope_read_without_canned_returns_zeros() -> None:
     assert out.shape == (256,)
     assert out.dtype == np.float64
     assert np.all(out == 0.0)
+
+
+def test_supply_discover_returns_canned_layout() -> None:
+    b = FakeBackend()
+    b.open()
+    layout = b.supply_discover_nodes()
+    # Default canned layout exposes vpos and vneg, each with enable/voltage/current nodes.
+    assert set(layout.keys()) == {"vpos", "vneg"}
+    pos_ch, pos_nodes = layout["vpos"]
+    assert {"enable", "voltage", "current"} <= set(pos_nodes.keys())
+
+
+def test_supply_set_and_get_node_roundtrip() -> None:
+    b = FakeBackend()
+    b.open()
+    layout = b.supply_discover_nodes()
+    ch, nodes = layout["vpos"]
+    b.supply_node_set(ch, nodes["voltage"], 2.5)
+    # In fake, get returns what was last set (or canned measured value if scripted).
+    assert b.supply_node_get(ch, nodes["voltage"]) == 2.5
+
+
+def test_supply_master_enable_records() -> None:
+    b = FakeBackend()
+    b.open()
+    b.supply_master_enable(True)
+    b.supply_master_enable(False)
+    enables = [c for c in b.supply_calls if c[0] == "master_enable"]
+    assert [c[1]["enabled"] for c in enables] == [True, False]
+
+
+def test_supply_canned_measurement_overrides_setpoint() -> None:
+    b = FakeBackend()
+    b.open()
+    layout = b.supply_discover_nodes()
+    ch, nodes = layout["vpos"]
+    b.set_supply_canned_status({(ch, nodes["voltage"]): 1.97})
+    b.supply_node_set(ch, nodes["voltage"], 2.0)
+    assert b.supply_node_get(ch, nodes["voltage"]) == 1.97

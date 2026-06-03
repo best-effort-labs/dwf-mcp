@@ -62,3 +62,16 @@ class DwfBackend(ABC):
 
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
         raise NotImplementedError
+
+    # Supply (AnalogIO) — added in stage 2.
+    def supply_discover_nodes(self) -> dict[str, tuple[int, dict[str, int]]]:
+        raise NotImplementedError
+
+    def supply_node_set(self, channel: int, node: int, value: float) -> None:
+        raise NotImplementedError
+
+    def supply_node_get(self, channel: int, node: int) -> float:
+        raise NotImplementedError
+
+    def supply_master_enable(self, enabled: bool) -> None:
+        raise NotImplementedError
