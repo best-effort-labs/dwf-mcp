@@ -16,17 +16,25 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import numpy as np
+from pydwf import (  # type: ignore[import-untyped]
+    DwfAcquisitionMode,
+    DwfAnalogCoupling,
+    DwfLibrary,
+    DwfState,
+    DwfTriggerSlope,
+    DwfTriggerSource,
+)
+
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfBackendError
 
 log = logging.getLogger(__name__)
 
 
 class PydwfBackend(DwfBackend):
-    """Backend backed by pydwf / libdwf. Imported lazily so unit tests can avoid it."""
+    """Backend backed by pydwf / libdwf. Requires pydwf installed (a hard dep)."""
 
     def __init__(self) -> None:
-        from pydwf import DwfLibrary  # type: ignore[import-untyped]
-
         self._dwf = DwfLibrary()
         self._device: Any | None = None
         self._info: DeviceInfo | None = None
@@ -97,3 +105,74 @@ class PydwfBackend(DwfBackend):
     @property
     def is_open(self) -> bool:
         return self._info is not None
+
+    # --- Scope (AnalogIn) ---------------------------------------------------
+
+    @property
+    def _analog_in(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.analogIn
+
+    def scope_configure(
+        self, channel: int, range_v: float, offset_v: float, coupling: str, enable: bool
+    ) -> None:
+        ch_idx = channel - 1  # pydwf is 0-indexed
+        ain = self._analog_in
+        ain.channelEnableSet(ch_idx, enable)
+        if enable:
+            ain.channelRangeSet(ch_idx, range_v)
+            ain.channelOffsetSet(ch_idx, offset_v)
+            cp = DwfAnalogCoupling.DC if coupling == "DC" else DwfAnalogCoupling.AC
+            ain.channelCouplingSet(ch_idx, cp)
+
+    def scope_set_acquisition(self, sample_rate_hz: float, buffer_size: int, mode: str) -> None:
+        ain = self._analog_in
+        ain.frequencySet(sample_rate_hz)
+        ain.bufferSizeSet(buffer_size)
+        # Only "Single" supported in v1. Streaming is stage 3.
+        if mode != "Single":
+            raise ValueError(f"only Single mode supported in v1, got {mode!r}")
+        ain.acquisitionModeSet(DwfAcquisitionMode.Single)
+
+    def scope_set_trigger(
+        self,
+        source: str,
+        channel: int | None,
+        level_v: float,
+        condition: str,
+        position_s: float,
+        timeout_s: float,
+    ) -> None:
+        ain = self._analog_in
+        src_map = {
+            "none": DwfTriggerSource.None_,
+            "detector_analog_in": DwfTriggerSource.DetectorAnalogIn,
+            "external1": DwfTriggerSource.External1,
+            "external2": DwfTriggerSource.External2,
+        }
+        ain.triggerSourceSet(src_map[source])
+        if channel is not None:
+            ain.triggerChannelSet(channel - 1)
+        ain.triggerLevelSet(level_v)
+        slope = (
+            DwfTriggerSlope.Rise
+            if condition == "Rising"
+            else (DwfTriggerSlope.Fall if condition == "Falling" else DwfTriggerSlope.Either)
+        )
+        ain.triggerConditionSet(slope)
+        ain.triggerPositionSet(position_s)
+        ain.triggerAutoTimeoutSet(timeout_s)
+
+    def scope_arm(self) -> None:
+        self._analog_in.configure(False, True)  # reconfigure=False, start=True
+
+    def scope_status(self) -> str:
+        st = self._analog_in.status(True)  # readData=True
+        # Map DwfState enum to our string. We care about "Done"; map the rest as their name.
+        if st == DwfState.Done:
+            return "Done"
+        return str(getattr(st, "name", st))
+
+    def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
+        return np.asarray(self._analog_in.statusData(channel - 1, count), dtype=np.float64)
