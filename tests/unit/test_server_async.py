@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock
 
 import pytest
 
