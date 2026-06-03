@@ -132,3 +132,47 @@ def test_supply_canned_measurement_overrides_setpoint() -> None:
     b.set_supply_canned_status({(ch, nodes["voltage"]): 1.97})
     b.supply_node_set(ch, nodes["voltage"], 2.0)
     assert b.supply_node_get(ch, nodes["voltage"]) == 1.97
+
+
+def test_i2c_configure_and_reset_record() -> None:
+    b = FakeBackend()
+    b.open()
+    b.i2c_configure(scl_pin_idx=0, sda_pin_idx=1, rate_hz=100_000, stretch=True, timeout_s=0.1)
+    b.i2c_reset()
+    kinds = [c[0] for c in b.i2c_calls]
+    assert kinds == ["configure", "reset"]
+
+
+def test_i2c_write_returns_canned_nak() -> None:
+    b = FakeBackend()
+    b.open()
+    b.set_i2c_acks({0x50: True, 0x51: False})  # 0x50 ACKs, 0x51 NAKs
+    b.i2c_configure(scl_pin_idx=0, sda_pin_idx=1, rate_hz=100_000, stretch=True, timeout_s=0.1)
+    assert b.i2c_write(address=0x50, data=b"\x00") == 0  # acked
+    assert b.i2c_write(address=0x51, data=b"\x00") == 1  # naked
+
+
+def test_i2c_read_returns_canned_bytes() -> None:
+    b = FakeBackend()
+    b.open()
+    b.set_i2c_reads({0x50: b"\xde\xad\xbe\xef"})
+    b.i2c_configure(scl_pin_idx=0, sda_pin_idx=1, rate_hz=100_000, stretch=True, timeout_s=0.1)
+    assert b.i2c_read(address=0x50, length=4) == b"\xde\xad\xbe\xef"
+    assert b.i2c_read(address=0x50, length=2) == b"\xde\xad"
+
+
+def test_i2c_write_read_roundtrip() -> None:
+    b = FakeBackend()
+    b.open()
+    b.set_i2c_reads({0x50: b"\x01\x02"})
+    b.i2c_configure(scl_pin_idx=0, sda_pin_idx=1, rate_hz=100_000, stretch=True, timeout_s=0.1)
+    assert b.i2c_write_read(address=0x50, write_data=b"\x10", read_length=2) == b"\x01\x02"
+
+
+def test_i2c_write_one_used_for_scan() -> None:
+    b = FakeBackend()
+    b.open()
+    b.set_i2c_acks({0x50: True, 0x51: True})
+    b.i2c_configure(scl_pin_idx=0, sda_pin_idx=1, rate_hz=100_000, stretch=True, timeout_s=0.1)
+    assert b.i2c_write_one(address=0x50, byte=0) == 0
+    assert b.i2c_write_one(address=0x77, byte=0) == 1  # not in canned -> NAK

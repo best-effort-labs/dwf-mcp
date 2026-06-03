@@ -75,3 +75,23 @@ class DwfBackend(ABC):
 
     def supply_master_enable(self, enabled: bool) -> None:
         raise NotImplementedError
+
+    # I2C (ProtocolI2C) — added in stage 2.
+    def i2c_configure(self, scl_pin_idx: int, sda_pin_idx: int, rate_hz: float,
+                      stretch: bool, timeout_s: float) -> None:
+        raise NotImplementedError
+
+    def i2c_reset(self) -> None:
+        raise NotImplementedError
+
+    def i2c_write(self, address: int, data: bytes) -> int:
+        raise NotImplementedError
+
+    def i2c_read(self, address: int, length: int) -> bytes:
+        raise NotImplementedError
+
+    def i2c_write_read(self, address: int, write_data: bytes, read_length: int) -> bytes:
+        raise NotImplementedError
+
+    def i2c_write_one(self, address: int, byte: int) -> int:
+        raise NotImplementedError

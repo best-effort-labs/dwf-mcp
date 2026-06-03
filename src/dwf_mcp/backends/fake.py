@@ -34,6 +34,10 @@ class FakeBackend(DwfBackend):
         }
         self._supply_setpoints: dict[tuple[int, int], float] = {}
         self._supply_canned_status: dict[tuple[int, int], float] = {}
+        # I2C (ProtocolI2C) state
+        self.i2c_calls: list[tuple[str, dict[str, Any]]] = []
+        self._i2c_acks: dict[int, bool] = {}
+        self._i2c_reads: dict[int, bytes] = {}
 
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
@@ -122,3 +126,41 @@ class FakeBackend(DwfBackend):
     # Test helpers
     def set_supply_canned_status(self, values: dict[tuple[int, int], float]) -> None:
         self._supply_canned_status = dict(values)
+
+    # --- I2C (ProtocolI2C) ---
+
+    def i2c_configure(self, scl_pin_idx: int, sda_pin_idx: int, rate_hz: float,
+                      stretch: bool, timeout_s: float) -> None:
+        self.i2c_calls.append(("configure", {
+            "scl_pin_idx": scl_pin_idx, "sda_pin_idx": sda_pin_idx,
+            "rate_hz": rate_hz, "stretch": stretch, "timeout_s": timeout_s,
+        }))
+
+    def i2c_reset(self) -> None:
+        self.i2c_calls.append(("reset", {}))
+
+    def i2c_write(self, address: int, data: bytes) -> int:
+        self.i2c_calls.append(("write", {"address": address, "data": data}))
+        return 0 if self._i2c_acks.get(address, False) else 1
+
+    def i2c_read(self, address: int, length: int) -> bytes:
+        self.i2c_calls.append(("read", {"address": address, "length": length}))
+        canned = self._i2c_reads.get(address, b"")
+        return canned[:length]
+
+    def i2c_write_read(self, address: int, write_data: bytes, read_length: int) -> bytes:
+        self.i2c_calls.append(("write_read", {
+            "address": address, "write_data": write_data, "read_length": read_length,
+        }))
+        return self._i2c_reads.get(address, b"")[:read_length]
+
+    def i2c_write_one(self, address: int, byte: int) -> int:
+        self.i2c_calls.append(("write_one", {"address": address, "byte": byte}))
+        return 0 if self._i2c_acks.get(address, False) else 1
+
+    # Test helpers
+    def set_i2c_acks(self, acks: dict[int, bool]) -> None:
+        self._i2c_acks = dict(acks)
+
+    def set_i2c_reads(self, reads: dict[int, bytes]) -> None:
+        self._i2c_reads = dict(reads)
