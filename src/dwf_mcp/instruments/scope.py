@@ -90,19 +90,27 @@ class Scope(Instrument):
             )
         pin_names = [f"scope{c}" for c in channels]
         self.device.allocator.claim("scope", pin_names)
-        for ch in (1, 2):
-            self.device.backend.scope_configure(
-                channel=ch,
-                range_v=range_v,
-                offset_v=offset_v,
-                coupling=coupling,
-                enable=(ch in channels),
+        # Clear stale state BEFORE backend calls so a partial failure leaves the
+        # instrument in an unconfigured state rather than an inconsistent one.
+        self._config = None
+        self._trigger = None
+        try:
+            for ch in (1, 2):
+                self.device.backend.scope_configure(
+                    channel=ch,
+                    range_v=range_v,
+                    offset_v=offset_v,
+                    coupling=coupling,
+                    enable=(ch in channels),
+                )
+            self.device.backend.scope_set_acquisition(
+                sample_rate_hz=sample_rate_hz,
+                buffer_size=buffer_size,
+                mode="Single",
             )
-        self.device.backend.scope_set_acquisition(
-            sample_rate_hz=sample_rate_hz,
-            buffer_size=buffer_size,
-            mode="Single",
-        )
+        except Exception:
+            self.device.allocator.release("scope")
+            raise
         self._config = {
             "channels": list(channels),
             "range_v": range_v,
@@ -208,6 +216,11 @@ class Scope(Instrument):
         samples: np.ndarray[Any, Any], sample_rate_hz: float
     ) -> dict[str, float]:
         arr = np.asarray(samples, dtype=np.float64)
+        if len(arr) == 0:
+            return {
+                "min": 0.0, "max": 0.0, "mean": 0.0, "rms": 0.0,
+                "freq_estimate": 0.0, "sample_rate": sample_rate_hz,
+            }
         mean = float(arr.mean())
         rms = float(np.sqrt(np.mean(arr**2)))
         # Rough frequency estimate via zero-crossings about the signal midpoint

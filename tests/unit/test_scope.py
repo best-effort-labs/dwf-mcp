@@ -99,3 +99,56 @@ def test_release_clears_pin_claims(scope: Scope) -> None:
                     sample_rate_hz=1_000_000, buffer_size=1024)
     scope.release()
     assert scope.device.allocator.claimed_pins() == {}
+
+
+def test_summarize_empty_array_does_not_crash() -> None:
+    """A misbehaving backend returning an empty array must not crash _summarize."""
+    result = Scope._summarize(np.array([], dtype=np.float64), sample_rate_hz=1_000_000)
+    assert result == {"min": 0.0, "max": 0.0, "mean": 0.0, "rms": 0.0,
+                      "freq_estimate": 0.0, "sample_rate": 1_000_000}
+
+
+def test_configure_backend_failure_leaves_instrument_unconfigured(
+    scope: Scope, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If a backend call raises mid-configure, state must roll back.
+
+    Pins must be released and _config must be None.
+    Tests the partial-failure pattern Supply and I2C will reuse.
+    """
+    # First configure succeeds.
+    scope.configure(channels=[1, 2], range_v=5.0, offset_v=0.0, coupling="DC",
+                    sample_rate_hz=1_000_000, buffer_size=1024)
+    assert scope._config is not None  # noqa: SLF001
+    # Now make scope_set_acquisition raise during a reconfigure.
+    backend = scope.device.backend
+    def boom_set_acq(**kwargs: object) -> None:
+        raise RuntimeError("backend on fire")
+    monkeypatch.setattr(backend, "scope_set_acquisition", boom_set_acq)
+    with pytest.raises(RuntimeError):
+        scope.configure(channels=[1], range_v=10.0, offset_v=0.0, coupling="DC",
+                        sample_rate_hz=2_000_000, buffer_size=2048)
+    # _config should be None (cleared before backend call, not restored).
+    assert scope._config is None  # noqa: SLF001
+    # Pins released — no stale scope1 claim from the failed reconfigure.
+    assert scope.device.allocator.claimed_pins() == {}
+
+
+def test_configure_first_call_failure_does_not_leak_pins(device: DwfDevice, tmp_path: Path) -> None:
+    """If a fresh configure (no prior state) fails mid-backend, pins must be released."""
+    from dwf_mcp.artifacts import ArtifactWriter
+    scope = Scope(device=device, artifacts=ArtifactWriter(workspace=tmp_path))
+    backend = scope.device.backend
+    original = backend.scope_configure
+    call_count = {"n": 0}
+    def boom_after_first(**kwargs: object) -> None:
+        call_count["n"] += 1
+        if call_count["n"] >= 2:
+            raise RuntimeError("backend on fire")
+        original(**kwargs)
+    backend.scope_configure = boom_after_first  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        scope.configure(channels=[1, 2], range_v=5.0, offset_v=0.0, coupling="DC",
+                        sample_rate_hz=1_000_000, buffer_size=1024)
+    assert scope.device.allocator.claimed_pins() == {}
+    assert scope._config is None  # noqa: SLF001
