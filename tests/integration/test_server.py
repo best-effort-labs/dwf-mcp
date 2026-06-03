@@ -197,3 +197,24 @@ async def test_supply_enable_above_cap_returns_safety_error(tmp_path) -> None:
     result = await app.call_tool("supply.enable", {"channel": "vpos"})
     assert result["error"]["type"] == "SafetyViolation"
     assert "5.0" in result["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_i2c_configure_scan_flow(tmp_path) -> None:
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    app.device.backend.set_i2c_acks({0x50: True, 0x68: True})  # type: ignore[attr-defined]
+    await app.call_tool("waveforms.open", {})
+    await app.call_tool("i2c.configure", {
+        "sda_pin": "dio0", "scl_pin": "dio1", "clock_hz": 100_000,
+    })
+    scan = await app.call_tool("i2c.scan", {})
+    assert scan["found"] == [0x50, 0x68]
+    await app.call_tool("waveforms.close", {})
+
+
+@pytest.mark.asyncio
+async def test_i2c_write_before_configure_returns_error(tmp_path) -> None:
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    result = await app.call_tool("i2c.write", {"address": 0x50, "data": [0x00]})
+    assert result["error"]["type"] == "InstrumentNotConfigured"
