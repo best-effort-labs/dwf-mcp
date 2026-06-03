@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import Any, cast
 
-from dwf_mcp.allocator import PinAllocator
-from dwf_mcp.backend import DwfBackend
+from dwf_mcp.allocator import PinAllocationError, PinAllocator
+from dwf_mcp.artifacts import ArtifactWriter
+from dwf_mcp.backend import DwfBackend, DwfDeviceLost
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.devices.ad3 import (
@@ -17,10 +19,19 @@ from dwf_mcp.devices.ad3 import (
     AD3_SUPPLY_PINS,
     AD3_TRIGGER_PINS,
 )
-from dwf_mcp.policy import SafetyPolicy
+from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
+from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 from dwf_mcp.registry import InstrumentRegistry
 
 log = logging.getLogger(__name__)
+
+
+_ERROR_TYPES: dict[type[Exception], str] = {
+    SafetyViolation: "SafetyViolation",
+    PinAllocationError: "PinAllocationError",
+    DwfDeviceLost: "DwfDeviceLost",
+    InstrumentNotConfigured: "InstrumentNotConfigured",
+}
 
 
 def _build_backend(name: str) -> DwfBackend:
@@ -41,25 +52,72 @@ def _all_pins() -> list[str]:
 
 
 class DwfMcpApp:
-    """Holds the device, registry, and tool dispatch. Tests call `call_tool` directly;
-    production wires this up to the MCP SDK stdio transport in `main()`."""
+    """Holds the device, registry, instruments, and tool dispatch. Tests call `call_tool`
+    directly; production wires this up to the MCP SDK stdio transport in `main()`."""
 
     def __init__(self, device: DwfDevice, registry: InstrumentRegistry) -> None:
         self.device = device
         self.registry = registry
-        self._tools: dict[str, Any] = {
-            "waveforms.open": self._tool_open,
-            "waveforms.close": self._tool_close,
-            "waveforms.status": self._tool_status,
-            "waveforms.list_pins": self._tool_list_pins,
-        }
+        self.instruments: dict[str, Instrument] = {}
+        self.artifacts = ArtifactWriter(
+            workspace=device.workspace if str(device.workspace) else None
+        )
+        # Sync device.workspace to whatever ArtifactWriter resolved (covers the temp-dir fallback).
+        self.device.workspace = self.artifacts.workspace
+        self._tools: dict[str, Any] = {}
+        self._tool_schemas: dict[str, dict[str, Any]] = {}
+        self._register_meta_tools()
+
+    def _register_meta_tools(self) -> None:
+        meta_schema = {"type": "object", "properties": {}}
+        for name, handler in [
+            ("waveforms.open", self._tool_open),
+            ("waveforms.close", self._tool_close),
+            ("waveforms.status", self._tool_status),
+            ("waveforms.list_pins", self._tool_list_pins),
+        ]:
+            self._tools[name] = handler
+            self._tool_schemas[name] = meta_schema
+
+    def register_instrument(self, cls: type[Instrument]) -> None:
+        """Register an instrument class; the instance is created lazily on first tool call.
+        Walks cls.tools to register `{instrument.name}.{suffix}` handlers + their schemas."""
+        self.registry.register(cls)
+        for suffix, (method_name, schema) in cls.tools.items():
+            tool_name = f"{cls.name}.{suffix}"
+            self._tools[tool_name] = self._make_instrument_handler(cls.name, method_name)
+            self._tool_schemas[tool_name] = schema
+
+    def _make_instrument_handler(self, instrument_name: str, method_name: str) -> Any:
+        async def handler(**kwargs: Any) -> Any:
+            instrument = self._get_or_create_instrument(instrument_name)
+            method = getattr(instrument, method_name)
+            return method(**kwargs)
+        return handler
+
+    def _get_or_create_instrument(self, name: str) -> Instrument:
+        if name not in self.instruments:
+            cls = self.registry.get_class(name)
+            self.instruments[name] = cls(device=self.device, artifacts=self.artifacts)
+        return self.instruments[name]
 
     async def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         try:
-            self.device.tick_idle()
-            return cast(dict[str, Any], await self._tools[name](**args))
+            handler = self._tools[name]
         except KeyError:
             raise ValueError(f"unknown tool {name!r}") from None
+        self.device.tick_idle()
+        try:
+            result = await handler(**args)
+            return cast(dict[str, Any], result)
+        except tuple(_ERROR_TYPES.keys()) as exc:
+            return {
+                "error": {
+                    "type": _ERROR_TYPES[type(exc)],
+                    "message": str(exc),
+                    "details": getattr(exc, "details", {}),
+                }
+            }
 
     async def _tool_open(self, **kwargs: Any) -> dict[str, Any]:
         policy_fields = {
@@ -70,6 +128,10 @@ class DwfMcpApp:
         }
         if policy_fields:
             self.device.policy = SafetyPolicy(**policy_fields)
+        workspace_dir = kwargs.pop("workspace_dir", None)
+        if workspace_dir:
+            self.device.workspace = Path(workspace_dir)
+            self.artifacts = ArtifactWriter(workspace=self.device.workspace)
         serial = kwargs.pop("device_serial", None)
         info = self.device.open(serial=serial)
         return {
@@ -84,6 +146,9 @@ class DwfMcpApp:
         }
 
     async def _tool_close(self) -> dict[str, Any]:
+        for instrument in list(self.instruments.values()):
+            instrument.release()
+        self.instruments.clear()
         self.device.close()
         return {"closed": True}
 
@@ -132,7 +197,10 @@ def main() -> None:
 
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_tools() -> list[dict[str, Any]]:
-        return [{"name": name, "description": ""} for name in app._tools]  # noqa: SLF001
+        return [
+            {"name": name, "description": "", "inputSchema": app._tool_schemas[name]}  # noqa: SLF001
+            for name in app._tools  # noqa: SLF001
+        ]
 
     @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> Any:
