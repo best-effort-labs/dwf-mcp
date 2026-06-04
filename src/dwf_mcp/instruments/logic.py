@@ -6,7 +6,6 @@ import dataclasses
 import logging
 import time
 import uuid
-from contextlib import suppress
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -97,8 +96,8 @@ LOGIC_RECORD_ID_SCHEMA: dict[str, Any] = {
 @dataclasses.dataclass
 class _RecordingSession:
     record_id: str
-    task: asyncio.Task  # type: ignore[type-arg]
-    queue: asyncio.Queue  # type: ignore[type-arg]  # streaming seam for future MCP notifications
+    task: asyncio.Task[Any]
+    queue: asyncio.Queue[Any]  # streaming seam for future MCP notifications
     chunks: list[np.ndarray]
     pins: list[str]
     sample_rate_hz: float
@@ -223,7 +222,7 @@ class Logic(Instrument):
                 self.artifacts.workspace / "captures" / f"logic_{uuid.uuid4().hex[:8]}.vcd"
             )
             vcd_writer.write(path, samples, pin_names, sample_rate_hz)
-            return {"path": str(path), "format": "vcd", "n_samples": len(samples)}
+            return {"path": str(path), "format": "vcd", "n_samples": samples.shape[0]}
 
         arrays = {name: samples[:, i] for i, name in enumerate(pin_names)}
         summary = CaptureSummary(
@@ -238,7 +237,7 @@ class Logic(Instrument):
             summary=summary,
             output_path=Path(output_path) if output_path else None,
         )
-        return {"path": result.path, "sidecar_path": result.sidecar_path, "format": "npz"}
+        return {"path": result.path, "sidecar_path": result.sidecar_path, "format": "npz", "n_samples": samples.shape[0]}
 
     # --- Streaming stubs (implemented in Task 7) ---
 
