@@ -62,6 +62,8 @@ def test_configure_calls_backend(uart: UART) -> None:
     assert cfg[1]["parity"] == "odd"
     assert cfg[1]["data_bits"] == 7
     assert cfg[1]["stop_bits"] == 2
+    assert cfg[1]["tx_idx"] == 0
+    assert cfg[1]["rx_idx"] == 1
 
 
 def test_configure_releases_on_exception(uart: UART) -> None:
@@ -72,6 +74,19 @@ def test_configure_releases_on_exception(uart: UART) -> None:
 
     with pytest.raises(RuntimeError):
         uart.configure(baud_rate=115200, tx_pin="dio0")
+    assert uart.device.allocator.claimed_pins() == {}
+
+
+def test_reconfigure_failed_leaves_unconfigured(uart: UART) -> None:
+    uart.configure(baud_rate=115200, tx_pin="dio0", rx_pin="dio1")
+    fake: FakeBackend = uart.device.backend  # type: ignore[assignment]
+    def raise_on_configure(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("hw error")
+    fake.uart_configure = raise_on_configure  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError):
+        uart.configure(baud_rate=9600, tx_pin="dio0", rx_pin="dio1")
+    assert not uart._configured
     assert uart.device.allocator.claimed_pins() == {}
 
 

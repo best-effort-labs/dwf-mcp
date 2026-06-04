@@ -88,7 +88,15 @@ class UART(Instrument):
         self._configured = True
         self._tx_pin = tx_pin
         self._rx_pin = rx_pin
-        return {"configured": True, "baud_rate": baud_rate}
+        return {
+            "configured": True,
+            "baud_rate": baud_rate,
+            "tx_pin": tx_pin,
+            "rx_pin": rx_pin,
+            "parity": parity,
+            "data_bits": data_bits,
+            "stop_bits": stop_bits,
+        }
 
     def write(self, data: list[int]) -> dict[str, Any]:
         self._require_configured()
