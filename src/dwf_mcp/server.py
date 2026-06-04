@@ -27,6 +27,10 @@ from dwf_mcp.instruments.logic import Logic
 from dwf_mcp.instruments.pattern import Pattern
 from dwf_mcp.instruments.scope import Scope
 from dwf_mcp.instruments.supply import Supply
+from dwf_mcp.instruments.can import CAN
+from dwf_mcp.instruments.dmm import DMM
+from dwf_mcp.instruments.spi import SPI
+from dwf_mcp.instruments.uart import UART
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 from dwf_mcp.registry import InstrumentRegistry
 
@@ -201,6 +205,10 @@ def build_app(
     app.register_instrument(Pattern)
     app.register_instrument(DIO)
     app.register_instrument(Logic)
+    app.register_instrument(DMM)
+    app.register_instrument(SPI)
+    app.register_instrument(UART)
+    app.register_instrument(CAN)
     return app
 
 

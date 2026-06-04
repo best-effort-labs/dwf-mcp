@@ -51,3 +51,17 @@ def test_build_app_registers_stage3a_tools(tmp_path):
     }
     missing = expected - tool_names
     assert missing == set(), f"missing tools: {missing}"
+
+
+def test_build_app_registers_stage3b_tools(tmp_path):
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    tool_names = set(app._tools)
+    expected = {
+        "dmm.measure",
+        "spi.configure", "spi.transfer", "spi.write", "spi.read",
+        "uart.configure", "uart.write", "uart.read",
+        "can.configure", "can.send", "can.receive",
+    }
+    missing = expected - tool_names
+    assert missing == set(), f"missing tools: {missing}"
