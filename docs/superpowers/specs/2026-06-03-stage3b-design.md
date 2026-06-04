@@ -44,15 +44,16 @@ dmm.measure(channel, range_v, coupling="DC", n_averages=64)
 
 #### Implementation
 
-1. `allocator.claim("dmm", [f"scope{channel}"])` — raises `PinAllocationError` if the scope instrument holds that channel
-2. `backend.dmm_configure(channel, range_v, coupling, n_averages)` — sets AnalogIn to Single acquisition mode, configures the channel, sets sample count
-3. `backend.dmm_arm()` — starts acquisition
-4. Poll `backend.dmm_status()` until `"Done"` (deadline: 2× expected acquisition time + 0.5s)
-5. `backend.dmm_read(channel, n_averages)` → `ndarray float64` of length `n_averages`
-6. `allocator.release("dmm")`
-7. Return computed statistics
+1. `allocator.claim("dmm", ["scope1", "scope2"])` — claims the entire AnalogIn resource exclusively; raises `PinAllocationError` if scope holds either channel
+2. `try:`
+3. `backend.dmm_configure(channel, range_v, coupling, n_averages)` — sets AnalogIn to Single acquisition mode, configures the channel, sets sample count
+4. `backend.dmm_arm()` — starts acquisition
+5. Poll `backend.dmm_status()` until `"Done"` (fixed deadline: 2.0s)
+6. `backend.dmm_read(channel, n_averages)` → `ndarray float64` of length `n_averages`
+7. `finally: allocator.release("dmm")` — released even on exception or timeout
+8. Return computed statistics
 
-The existing `scope_pair` non-exclusive resource group permits scope on channel 1 and DMM on channel 2 simultaneously. Conflict behavior: if the scope instrument holds `scope1`, `dmm.measure(channel=1)` raises `PinAllocationError`. Document this in `dmm.py` docstring.
+**AnalogIn exclusivity:** AnalogIn has a single shared acquisition engine — sample rate, buffer size, mode, and trigger are global across channels. DMM reconfiguring AnalogIn while a scope acquisition is armed would corrupt the scope state. DMM therefore claims both `scope1` and `scope2`, making it mutually exclusive with any scope operation. The `scope_pair` non-exclusive group does not help here — it allows two instruments to each hold a pin, but not to share the underlying hardware configuration. Document this constraint in `dmm.py` docstring.
 
 #### Backend surface
 
@@ -79,11 +80,13 @@ spi.write(data, assert_cs=True)      → {bytes_written: N}
 spi.read(length, assert_cs=True)     → {data: [...], data_hex: str}
 ```
 
-`mode`: 0–3 (CPOL/CPHA). `data` in write/transfer/read: list of ints (0–255). `assert_cs=False` allows manual CS control via DIO for non-standard CS timing.
+`mode`: 0–3 (CPOL/CPHA). `data` in write/transfer/read: list of ints (0–255).
+
+`assert_cs=False` means "do not assert or deassert CS within this transfer" — useful for chaining multiple back-to-back transfers while holding CS low. It does **not** route CS to a DIO instrument; SPI holds its configured `cs_pin` for its entire session. To control CS externally (e.g., via DIO), omit `cs_pin` from `spi.configure()` entirely — then no CS pin is claimed and DIO can drive it freely.
 
 #### Pin allocation
 
-`spi.configure(...)` calls `allocator.claim("spi", [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None])`. Partial-failure rollback: on backend exception, `allocator.release("spi")`.
+`spi.configure(...)` calls `allocator.claim("spi", [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None])`. Partial-failure rollback follows the I2C/Logic pattern: clear `_configured = False` before backend calls; on exception, `allocator.release("spi")` and re-raise. A failed reconfigure leaves the instrument unconfigured (same as I2C). This differs from AWG which restores prior state; for SPI the hardware state after a failed configure is indeterminate, so unconfigured is the only safe choice.
 
 #### Backend surface
 
@@ -146,7 +149,7 @@ can.receive(timeout_s=1.0)           → {id, data, data_hex, extended, error_co
 ```python
 can_configure(tx_idx: int, rx_idx: int, bit_rate: int) -> None
 can_send(id: int, data: bytes, extended: bool) -> None
-can_receive(timeout_s: float) -> tuple[int, bytes, bool, int]  # (id, data, extended, error_count)
+can_receive(timeout_s: float) -> tuple[int | None, bytes, bool, int]  # (id, data, extended, error_count); id=None on timeout
 ```
 
 ---
@@ -161,18 +164,29 @@ Extracted from `logic.py`'s `_RecordingSession` and `_record_loop`. Made generic
 @dataclasses.dataclass
 class RecordingSession:
     record_id: str
-    task: asyncio.Task[None] | None
-    queue: asyncio.Queue[np.ndarray]
-    chunks: list[np.ndarray]
+    task: asyncio.Task[None] | None               # hardware poll loop
+    notification_task: asyncio.Task[None] | None  # MCP notification loop (separate)
+    queue: asyncio.Queue[np.ndarray | None]       # bounded; None is stop sentinel
+    chunks: list[np.ndarray]                      # accumulated for npz artifact assembly
     lost_samples: int
     done: bool
     error: str | None
     on_chunk: Callable[[str, np.ndarray], Awaitable[None]] | None = None
+    on_chunk_sync: Callable[[np.ndarray], None] | None = None
+    # on_chunk_sync: called synchronously in the poll loop for each chunk before queue put.
+    # Used by Logic for incremental VCD writing (see Workstream C). When set, chunks are NOT
+    # appended to session.chunks (write-through avoids double memory for VCD format).
     meta: dict[str, Any] = dataclasses.field(default_factory=dict)
-    # meta carries instrument-specific fields needed for artifact assembly at record_stop:
+    # meta carries instrument-specific fields needed for record_stop artifact assembly:
     # logic: {"pins", "sample_rate_hz", "output_path", "format"}
     # scope: {"channels", "range_v", "sample_rate_hz", "output_path"}
+```
 
+**Queue design:** `asyncio.Queue(maxsize=32)`. The poll loop uses `put_nowait`; if the queue is full, the chunk is dropped from the notification path (the chunk is still processed for artifact assembly). A dropped notification is not an error — it means the client is not consuming fast enough.
+
+**Two-task design:** The poll loop and the notification delivery run as separate tasks so that a slow or disconnected MCP client cannot block hardware polling.
+
+```python
 async def record_loop(
     session: RecordingSession,
     poll_fn: Callable[[], tuple[int, int, int]],   # returns (available, lost, remaining)
@@ -185,10 +199,19 @@ async def record_loop(
             session.lost_samples += lost
             if available > 0:
                 chunk = read_fn(available)
-                session.chunks.append(chunk)
-                await session.queue.put(chunk)
-                if session.on_chunk is not None:
-                    await session.on_chunk(session.record_id, chunk)
+                if session.on_chunk_sync is not None:
+                    try:
+                        session.on_chunk_sync(chunk)
+                    except Exception as exc:
+                        session.error = str(exc)
+                        session.done = True
+                        return
+                else:
+                    session.chunks.append(chunk)
+                try:
+                    session.queue.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    pass  # notification dropped; recording continues unaffected
             if remaining == 0:
                 session.done = True
     except asyncio.CancelledError:
@@ -196,9 +219,36 @@ async def record_loop(
     except Exception as exc:
         session.error = str(exc)
         session.done = True
+    finally:
+        # Signal notification task to stop after draining remaining items.
+        with contextlib.suppress(asyncio.QueueFull):
+            session.queue.put_nowait(None)
+
+async def notification_loop(
+    session: RecordingSession,
+    on_chunk: Callable[[str, np.ndarray], Awaitable[None]],
+) -> None:
+    while True:
+        item = await session.queue.get()
+        if item is None:
+            break
+        try:
+            await on_chunk(session.record_id, item)
+        except Exception:
+            log.warning("notification send failed for record_id=%r", session.record_id)
+            # Notification failure never sets session.error or stops recording.
 ```
 
-`logic.py` is updated to import `RecordingSession` and `record_loop` from `streaming.py`. Its `_RecordingSession` dataclass and `_record_loop` method are deleted. All existing behavior is preserved; the migration is mechanical.
+`record_start` spawns both tasks:
+```python
+session.task = asyncio.create_task(record_loop(session, poll_fn, read_fn))
+if on_chunk is not None:
+    session.notification_task = asyncio.create_task(notification_loop(session, on_chunk))
+```
+
+`record_stop` cancels both tasks (notification task after record loop finishes draining).
+
+`logic.py` is updated to import `RecordingSession`, `record_loop`, and `notification_loop` from `streaming.py`. Its `_RecordingSession` dataclass and `_record_loop` method are deleted. All existing behavior is preserved; the migration is mechanical.
 
 ### `scope.record` — three new tools on `Scope`
 
@@ -218,9 +268,19 @@ scope.record_stop(record_id)
 
 `channels`: list of 1 and/or 2. Artifact format: `npz` only — analog data is not representable in VCD.
 
+#### Scope state machine
+
+`Scope` gains `_mode: Literal[None, "buffer", "record"] = None`. The allocator alone does not prevent the same instrument instance from entering both modes simultaneously (an owner can re-claim its own slot). Explicit state is required:
+
+- `configure()` raises `RuntimeError` if `_mode == "record"` ("scope.record_stop must be called before reconfiguring buffer mode")
+- `record_start()` raises `RuntimeError` if `_mode == "buffer"` ("scope.release or scope.record_stop must be called before starting a record")
+- `capture()` requires `_mode == "buffer"`
+- `record_stop()` resets `_mode = None` and releases the pin claim
+- `release()` resets `_mode = None`
+
 #### Pin allocation
 
-`allocator.claim("scope", [f"scope{c}" for c in channels])` — same slot as buffer-mode scope, so buffer-mode and record-mode are mutually exclusive on the same instrument instance.
+`allocator.claim("scope", [f"scope{c}" for c in channels])` — same allocator slot as buffer-mode scope. The `_mode` state machine above enforces mutual exclusivity between the two paths; the allocator claim prevents other instruments from using the same pins.
 
 #### record_stop sequence
 
@@ -307,8 +367,6 @@ When `on_record_chunk` is `None` (unit tests, direct `call_tool` usage), recordi
 
 ### Streaming VCD assembly (`VcdStreamWriter`)
 
-Currently `logic.record_stop` concatenates all chunks into a single array and calls `vcd_writer.write()` once. For long records this requires holding all samples in memory simultaneously.
-
 `vcd_writer.py` gains a context-manager writer that appends transitions incrementally:
 
 ```python
@@ -320,7 +378,15 @@ class VcdStreamWriter:
     def __exit__(self, *_: object) -> None: ...
 ```
 
-`write_chunk` maintains a running sample counter and last-seen state per pin, appending only transitions to the open VCD file. `logic.record_stop` uses `VcdStreamWriter` when `format="vcd"`, replacing the current concatenate-then-write path.
+`write_chunk` maintains a running sample counter and last-seen state per pin, appending only transitions to the open VCD file.
+
+**Bounded-memory integration:** For VCD format, the writer is opened at `record_start` time and stored as `session.meta["vcd_writer"]`. `Logic.record_start` sets `session.on_chunk_sync = session.meta["vcd_writer"].write_chunk`. The `record_loop` in `streaming.py` calls `on_chunk_sync(chunk)` synchronously for each chunk and does NOT append to `session.chunks`. This gives truly bounded memory during acquisition — only the current chunk is in flight. At `record_stop`, `session.meta["vcd_writer"].close()` is called; no concatenation step.
+
+For npz format, `on_chunk_sync` is `None` and `session.chunks` accumulates as before.
+
+`logic.record_stop` artifact assembly:
+- VCD format: call `session.meta["vcd_writer"].close()`, return path
+- npz format: concatenate `session.chunks`, write npz as before
 
 The existing `vcd_writer.write()` one-shot function is unchanged — still used by `logic.capture` (buffer-mode).
 
@@ -336,11 +402,12 @@ The existing `vcd_writer.write()` one-shot function is unchanged — still used 
 | `test_spi.py` | Configure pin claim; full-duplex transfer; write-only; read-only; `InstrumentNotConfigured` before configure; partial-failure rollback |
 | `test_uart.py` | Configure; write; read with `parity_error=True`; `ValueError` if both tx and rx are `None` |
 | `test_can.py` | Configure; send standard and extended frame; receive; error_count propagated |
-| `test_streaming.py` | `record_loop` with synthetic poll/read fns; `on_chunk` called per chunk; cancellation propagates cleanly; backend exception sets `error` and `done=True`; `remaining==0` terminates loop |
-| `test_scope.py` (additions) | `record_start/status/stop` lifecycle; pin claim/release; npz artifact written; `artifact_error` set on write failure; best-effort completion on error |
-| `test_logic.py` (updates) | All existing tests pass after `_RecordingSession` extraction — no behavior change; `on_chunk` callback invoked when provided |
-| `test_server_async.py` (additions) | `on_record_chunk` injected into `logic.record_start` and `scope.record_start` calls; not injected for non-record-start tools; `None` on_record_chunk skips notification |
-| `test_vcd_writer.py` (additions) | `VcdStreamWriter` multi-chunk round-trip matches one-shot `write()` output; timescale preserved across chunks |
+| `test_streaming.py` | `record_loop` with synthetic poll/read fns; `on_chunk_sync` called per chunk before queue put; chunks not accumulated when `on_chunk_sync` set; `put_nowait` drops silently when queue full; `notification_loop` consumes queue; notification exception does not set `session.error`; cancellation propagates cleanly; backend exception sets `error` and `done=True`; `remaining==0` terminates loop |
+| `test_scope.py` (additions) | `record_start/status/stop` lifecycle; `_mode` prevents simultaneous buffer+record; `RuntimeError` on mode conflict; pin claim/release; npz artifact written; `artifact_error` set on write failure |
+| `test_logic.py` (updates) | All existing tests pass after `_RecordingSession` extraction — no behavior change; VCD path sets `on_chunk_sync` and skips chunks accumulation |
+| `test_server_async.py` (additions) | `on_record_chunk` injected into `logic.record_start` and `scope.record_start` calls; not injected for other tools; `None` skips notification task |
+| `test_vcd_writer.py` (additions) | `VcdStreamWriter` multi-chunk round-trip matches one-shot `write()` output; timescale and sample counter preserved across chunks |
+| `test_dmm.py` (update) | Claims both scope1+scope2; `PinAllocationError` if scope holds either channel; claim released in finally even on timeout |
 
 `FakeBackend` additions:
 - All new backend methods use `record_call` + canned responses
