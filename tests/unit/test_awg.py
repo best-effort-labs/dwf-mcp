@@ -107,3 +107,27 @@ def test_upload_custom_claims_pin(awg: AWG, tmp_path: Path) -> None:
     np.save(npy_path, samples)
     awg.upload_custom(channel=1, samples_npy_path=str(npy_path))
     assert "awg1" in awg.device.allocator.claimed_pins()
+
+
+def test_upload_custom_stores_amplitude_for_safety_gate(awg: AWG) -> None:
+    # upload_custom with amplitude_v=5.0 should trigger safety gate on start
+    bad_samples = np.linspace(-1.0, 1.0, 100)
+    awg.upload_custom(channel=1, samples_npy_path=None, amplitude_v=5.0, _samples=bad_samples)
+    with pytest.raises(SafetyViolation):
+        awg.start(channel=1)
+
+
+def test_upload_custom_rejects_out_of_range_samples(awg: AWG) -> None:
+    bad = np.array([0.0, 1.5, -0.5])  # 1.5 exceeds [-1, 1]
+    with pytest.raises(ValueError, match=r"\[-1\.0, 1\.0\]"):
+        awg.upload_custom(channel=1, samples_npy_path=None, _samples=bad)
+
+
+def test_release_stops_all_channels(awg: AWG) -> None:
+    awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=1.0)
+    awg.configure(channel=2, function="Square", frequency_hz=500.0, amplitude_v=0.5)
+    awg.release()
+    fake: FakeBackend = awg.device.backend  # type: ignore[assignment]
+    stops = [c for c in fake.awg_calls if c[0] == "stop"]
+    assert len(stops) == 2
+    assert awg.device.allocator.claimed_pins() == {}

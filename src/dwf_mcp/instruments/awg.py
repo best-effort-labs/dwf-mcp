@@ -1,6 +1,7 @@
 """AWG (AnalogOut) instrument. Two channels (W1/W2), accumulating pin claim model."""
 from __future__ import annotations
 
+import contextlib
 from typing import Any, ClassVar
 
 import numpy as np
@@ -40,6 +41,7 @@ AWG_UPLOAD_SCHEMA: dict[str, Any] = {
     "properties": {
         "channel": {"type": "integer", "enum": [1, 2]},
         "samples_npy_path": {"type": "string"},
+        "amplitude_v": {"type": "number", "minimum": 0.0, "default": 1.0},
     },
 }
 
@@ -114,6 +116,7 @@ class AWG(Instrument):
         self,
         channel: int,
         samples_npy_path: str | None,
+        amplitude_v: float = 1.0,
         _samples: np.ndarray | None = None,  # for unit testing without a file
     ) -> dict[str, Any]:
         if _samples is not None:
@@ -125,6 +128,11 @@ class AWG(Instrument):
         if samples.ndim != 1:
             raise ValueError(f"samples must be 1-D, got shape {samples.shape}")
         samples = np.asarray(samples, dtype=np.float64)
+        if samples.size > 0 and (samples.min() < -1.0 or samples.max() > 1.0):
+            raise ValueError(
+                f"custom waveform samples must be in [-1.0, 1.0], "
+                f"got range [{float(samples.min()):.3f}, {float(samples.max()):.3f}]"
+            )
         pin = _CHANNEL_TO_PIN[channel]
         prior_channels = _Set(self._configured_channels)
         new_pins = sorted(_CHANNEL_TO_PIN[c] for c in (prior_channels | {channel}))
@@ -139,6 +147,7 @@ class AWG(Instrument):
                 self.device.allocator.release("awg")
             raise
         self._configured_channels.add(channel)
+        self._amplitude[channel] = amplitude_v
         return {"uploaded": True, "channel": channel, "n_samples": len(samples), "pin": pin}
 
     def start(self, channel: int) -> dict[str, Any]:
@@ -156,10 +165,8 @@ class AWG(Instrument):
 
     def release(self) -> None:
         for ch in list(self._configured_channels):
-            try:
+            with contextlib.suppress(Exception):
                 self.device.backend.awg_stop(channel=ch)
-            except Exception:
-                pass
         self.device.allocator.release("awg")
         self._configured_channels.clear()
         self._amplitude.clear()
