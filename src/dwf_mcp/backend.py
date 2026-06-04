@@ -63,6 +63,30 @@ class DwfBackend(ABC):
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
         raise NotImplementedError
 
+    # Scope record-mode (AnalogIn streaming) — added in stage 3b.
+    def scope_record_configure(
+        self,
+        channels: list[int],
+        range_v: float,
+        offset_v: float,
+        coupling: str,
+        sample_rate_hz: float,
+        duration_s: float,
+    ) -> None:
+        raise NotImplementedError
+
+    def scope_record_arm(self) -> None:
+        raise NotImplementedError
+
+    def scope_record_status(self) -> tuple[int, int, int]:
+        raise NotImplementedError
+
+    def scope_record_read(self, count: int) -> np.ndarray:
+        raise NotImplementedError
+
+    def scope_record_stop(self) -> None:
+        raise NotImplementedError
+
     # Supply (AnalogIO) — added in stage 2.
     def supply_discover_nodes(self) -> dict[str, tuple[int, dict[str, int]]]:
         raise NotImplementedError

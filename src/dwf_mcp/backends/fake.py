@@ -54,6 +54,11 @@ class FakeBackend(DwfBackend):
         self._logic_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
         self._logic_record_status_idx = 0
         self._logic_record_canned_chunk: np.ndarray = np.zeros((10, 16), dtype=np.uint8)
+        # Scope record-mode state
+        self.scope_record_calls: list[tuple[str, dict[str, Any]]] = []
+        self._scope_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
+        self._scope_record_status_idx = 0
+        self._scope_record_canned_chunk: np.ndarray = np.zeros((10, 2), dtype=np.float64)
         # DMM (AnalogIn measurement) state
         self.dmm_calls: list[tuple[str, dict[str, Any]]] = []
         self._dmm_status_sequence: list[str] = ["Done"]
@@ -422,3 +427,45 @@ class FakeBackend(DwfBackend):
         self, id: int | None, data: bytes, extended: bool, error_count: int
     ) -> None:
         self._can_canned_frame = (id, data, extended, error_count)
+
+    # --- Scope record-mode ---
+
+    def scope_record_configure(
+        self,
+        channels: list[int],
+        range_v: float,
+        offset_v: float,
+        coupling: str,
+        sample_rate_hz: float,
+        duration_s: float,
+    ) -> None:
+        self.scope_record_calls.append(("scope_record_configure", {
+            "channels": channels, "range_v": range_v, "offset_v": offset_v,
+            "coupling": coupling, "sample_rate_hz": sample_rate_hz,
+            "duration_s": duration_s,
+        }))
+
+    def scope_record_arm(self) -> None:
+        self.scope_record_calls.append(("scope_record_arm", {}))
+
+    def scope_record_status(self) -> tuple[int, int, int]:
+        self.scope_record_calls.append(("scope_record_status", {}))
+        idx = self._scope_record_status_idx
+        seq = self._scope_record_status_sequence
+        result = seq[min(idx, len(seq) - 1)]
+        self._scope_record_status_idx += 1
+        return result
+
+    def scope_record_read(self, count: int) -> np.ndarray:
+        self.scope_record_calls.append(("scope_record_read", {"count": count}))
+        return self._scope_record_canned_chunk[:count].copy()
+
+    def scope_record_stop(self) -> None:
+        self.scope_record_calls.append(("scope_record_stop", {}))
+
+    # Test helper
+    def set_scope_record_status_sequence(
+        self, seq: list[tuple[int, int, int]]
+    ) -> None:
+        self._scope_record_status_sequence = list(seq)
+        self._scope_record_status_idx = 0
