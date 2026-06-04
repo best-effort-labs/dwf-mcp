@@ -1,15 +1,23 @@
-"""Scope (analog-in) instrument. Buffer-mode acquisition for v1; streaming deferred."""
+"""Scope (analog-in) instrument. Buffer-mode and streaming record-mode acquisition."""
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
+import uuid
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 
 from dwf_mcp.artifacts import ArtifactWriter, CaptureSummary
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
+from dwf_mcp.streaming import RecordingSession, notification_loop, process_chunk, record_loop
+
+log = logging.getLogger(__name__)
 
 _VALID_COUPLINGS = {"DC", "AC"}
 _VALID_CONDITIONS = {"Rising", "Falling", "Either"}
@@ -60,13 +68,41 @@ SCOPE_CAPTURE_SCHEMA: dict[str, Any] = {
     },
 }
 
+SCOPE_RECORD_START_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["channels", "range_v", "sample_rate_hz", "duration_s"],
+    "properties": {
+        "channels": {
+            "type": "array",
+            "items": {"type": "integer", "enum": [1, 2]},
+            "minItems": 1,
+            "uniqueItems": True,
+        },
+        "range_v": {"type": "number", "minimum": 0.01, "maximum": 50.0},
+        "offset_v": {"type": "number", "default": 0.0},
+        "coupling": {"type": "string", "enum": ["DC", "AC"], "default": "DC"},
+        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 125_000_000.0},
+        "duration_s": {"type": "number", "minimum": 0.001},
+        "output_path": {"type": "string"},
+    },
+}
+
+SCOPE_RECORD_ID_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["record_id"],
+    "properties": {"record_id": {"type": "string"}},
+}
+
 
 class Scope(Instrument):
     name = "scope"
     tools: ClassVar[dict[str, tuple[str, dict[str, Any]]]] = {
-        "configure":   ("configure",   SCOPE_CONFIGURE_SCHEMA),
-        "set_trigger": ("set_trigger", SCOPE_TRIGGER_SCHEMA),
-        "capture":     ("capture",     SCOPE_CAPTURE_SCHEMA),
+        "configure":      ("configure",      SCOPE_CONFIGURE_SCHEMA),
+        "set_trigger":    ("set_trigger",    SCOPE_TRIGGER_SCHEMA),
+        "capture":        ("capture",        SCOPE_CAPTURE_SCHEMA),
+        "record_start":   ("record_start",   SCOPE_RECORD_START_SCHEMA),
+        "record_status":  ("record_status",  SCOPE_RECORD_ID_SCHEMA),
+        "record_stop":    ("record_stop",    SCOPE_RECORD_ID_SCHEMA),
     }
 
     def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
@@ -74,6 +110,10 @@ class Scope(Instrument):
         self.artifacts = artifacts
         self._config: dict[str, Any] | None = None
         self._trigger: dict[str, Any] | None = None
+        self._mode: Literal[None, "buffer", "record"] = None
+        self._sessions: dict[str, RecordingSession] = {}
+
+    # --- Buffer-mode ---
 
     def configure(
         self,
@@ -84,14 +124,16 @@ class Scope(Instrument):
         offset_v: float = 0.0,
         coupling: str = "DC",
     ) -> dict[str, Any]:
+        if self._mode == "record":
+            raise RuntimeError(
+                "scope is in record mode — call scope.record_stop() before reconfiguring"
+            )
         if coupling not in _VALID_COUPLINGS:
             raise ValueError(
                 f"coupling must be one of {sorted(_VALID_COUPLINGS)}, got {coupling!r}"
             )
         pin_names = [f"scope{c}" for c in channels]
         self.device.allocator.claim("scope", pin_names)
-        # Clear stale state BEFORE backend calls so a partial failure leaves the
-        # instrument in an unconfigured state rather than an inconsistent one.
         self._config = None
         self._trigger = None
         try:
@@ -119,6 +161,7 @@ class Scope(Instrument):
             "sample_rate_hz": sample_rate_hz,
             "buffer_size": buffer_size,
         }
+        self._mode = "buffer"
         return {"configured": True}
 
     def set_trigger(
@@ -161,7 +204,7 @@ class Scope(Instrument):
         output_path: str | None = None,
         description: str | None = None,
     ) -> dict[str, Any]:
-        if self._config is None:
+        if self._config is None or self._mode != "buffer":
             raise InstrumentNotConfigured(
                 "scope.configure must be called before capture"
             )
@@ -206,10 +249,200 @@ class Scope(Instrument):
             "summary": summary_per_ch,
         }
 
+    # --- Record-mode ---
+
+    async def record_start(
+        self,
+        channels: list[int],
+        range_v: float,
+        sample_rate_hz: float,
+        duration_s: float,
+        offset_v: float = 0.0,
+        coupling: str = "DC",
+        output_path: str | None = None,
+        on_chunk: Callable[[str, np.ndarray], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]:
+        if self._mode == "record":
+            raise RuntimeError(
+                "scope is already in record mode — call scope.record_stop() first"
+            )
+        if coupling not in _VALID_COUPLINGS:
+            raise ValueError(
+                f"coupling must be one of {sorted(_VALID_COUPLINGS)}, got {coupling!r}"
+            )
+        # Implicit buffer release when switching from buffer to record mode.
+        if self._mode == "buffer":
+            self.device.allocator.release("scope")
+            self._config = None
+            self._trigger = None
+            self._mode = None
+
+        pin_names = [f"scope{c}" for c in channels]
+        self.device.allocator.claim("scope", pin_names)
+        try:
+            self.device.backend.scope_record_configure(
+                channels=list(channels),
+                range_v=range_v,
+                offset_v=offset_v,
+                coupling=coupling,
+                sample_rate_hz=sample_rate_hz,
+                duration_s=duration_s,
+            )
+            self.device.backend.scope_record_arm()
+        except Exception:
+            self.device.allocator.release("scope")
+            raise
+
+        record_id = str(uuid.uuid4())
+        queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=32)
+        session = RecordingSession(
+            record_id=record_id,
+            task=None,
+            notification_task=None,
+            queue=queue,
+            chunks=[],
+            lost_samples=0,
+            done=False,
+            error=None,
+            on_chunk=on_chunk,
+            on_chunk_sync=None,
+            meta={
+                "channels": list(channels),
+                "range_v": range_v,
+                "sample_rate_hz": sample_rate_hz,
+                "output_path": output_path,
+            },
+        )
+        try:
+            session.task = asyncio.create_task(
+                record_loop(
+                    session,
+                    self.device.backend.scope_record_status,
+                    self.device.backend.scope_record_read,
+                )
+            )
+            if on_chunk is not None:
+                session.notification_task = asyncio.create_task(
+                    notification_loop(session, on_chunk)
+                )
+        except Exception:
+            if session.task is not None:
+                session.task.cancel()
+            try:
+                self.device.backend.scope_record_stop()
+            except Exception:
+                pass
+            self.device.allocator.release("scope")
+            raise
+
+        self._sessions[record_id] = session
+        self._mode = "record"
+        return {"record_id": record_id}
+
+    def record_status(self, record_id: str) -> dict[str, Any]:
+        session = self._sessions.get(record_id)
+        if session is None:
+            raise ValueError(f"unknown record_id {record_id!r}")
+        return {
+            "record_id": record_id,
+            "done": session.done,
+            "chunks_received": len(session.chunks),
+            "lost_samples": session.lost_samples,
+            "error": session.error,
+        }
+
+    async def record_stop(self, record_id: str) -> dict[str, Any]:
+        session = self._sessions.get(record_id)
+        if session is None:
+            raise ValueError(f"unknown record_id {record_id!r}")
+        artifact_path: str | None = None
+        sidecar_path: str | None = None
+        artifact_error: str | None = None
+        try:
+            # 1. Cancel background tasks.
+            if session.task is not None:
+                session.task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await session.task
+            if session.notification_task is not None:
+                session.notification_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await session.notification_task
+            # 2. Stop hardware.
+            try:
+                self.device.backend.scope_record_stop()
+            except Exception as exc:
+                log.warning("scope_record_stop failed: %s", exc)
+            # 3. Drain remaining samples.
+            try:
+                available, lost, _ = self.device.backend.scope_record_status()
+                session.lost_samples += lost
+                if available > 0:
+                    chunk = self.device.backend.scope_record_read(available)
+                    try:
+                        process_chunk(session, chunk)
+                    except Exception as exc:
+                        log.warning("drain process_chunk failed: %s", exc)
+            except Exception as exc:
+                log.warning("drain after scope_record_stop failed: %s", exc)
+            # 4. Write npz artifact (best-effort).
+            if session.chunks:
+                try:
+                    channels = session.meta["channels"]
+                    all_raw = np.concatenate(session.chunks, axis=0)
+                    # scope_record_read always returns shape (N, 2); slice to configured channels.
+                    ch_indices = [c - 1 for c in channels]
+                    arrays = {f"ch{c}": all_raw[:, i] for i, c in zip(ch_indices, channels)}
+                    summary_per_ch = {
+                        f"ch{c}": self._summarize(
+                            all_raw[:, i], session.meta["sample_rate_hz"]
+                        )
+                        for i, c in zip(ch_indices, channels)
+                    }
+                    summary = CaptureSummary(
+                        instrument="scope",
+                        sample_count=all_raw.shape[0],
+                        sample_rate_hz=session.meta["sample_rate_hz"],
+                        extra=summary_per_ch,
+                    )
+                    out = session.meta.get("output_path")
+                    npz_result = self.artifacts.write_npz(
+                        instrument="scope",
+                        arrays=arrays,
+                        config=session.meta,
+                        summary=summary,
+                        output_path=Path(out) if out else None,
+                    )
+                    artifact_path = npz_result.path
+                    sidecar_path = npz_result.sidecar_path
+                except Exception as exc:
+                    log.exception("artifact write failed for record_id=%r", record_id)
+                    artifact_error = str(exc)
+        finally:
+            del self._sessions[record_id]
+            self.device.allocator.release("scope")
+            self._mode = None
+
+        return {
+            "record_id": record_id,
+            "artifact_path": artifact_path,
+            "sidecar_path": sidecar_path,
+            "lost_samples": session.lost_samples,
+            "error": session.error,
+            "artifact_error": artifact_error,
+        }
+
     def release(self) -> None:
+        for session in list(self._sessions.values()):
+            if session.task is not None:
+                session.task.cancel()
+            if session.notification_task is not None:
+                session.notification_task.cancel()
+        self._sessions.clear()
         self.device.allocator.release("scope")
         self._config = None
         self._trigger = None
+        self._mode = None
 
     @staticmethod
     def _summarize(
@@ -223,9 +456,6 @@ class Scope(Instrument):
             }
         mean = float(arr.mean())
         rms = float(np.sqrt(np.mean(arr**2)))
-        # Rough frequency estimate via zero-crossings about the signal midpoint
-        # (max+min)/2 — robust to DC bias and partial-cycle mean drift that would
-        # add a phantom crossing if we centered by the arithmetic mean.
         if len(arr) > 0:
             midpoint = float(arr.max() + arr.min()) / 2.0
             centered = arr - midpoint
