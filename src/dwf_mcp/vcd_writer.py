@@ -33,6 +33,10 @@ def write(
         )
 
     n_samples, n_pins = samples.shape
+    if len(pin_names) != n_pins:
+        raise ValueError(
+            f"pin_names length {len(pin_names)} does not match samples columns {n_pins}"
+        )
     # Compute timescale: pick ns or us depending on sample rate.
     # 1 sample = 1/sample_rate_hz seconds.
     period_s = 1.0 / sample_rate_hz
@@ -52,23 +56,22 @@ def write(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with path.open("w") as f:
-        with _vcd.VCDWriter(f, timescale=timescale, date="today") as writer:
-            # Register one variable per pin.
-            vars_: list[Any] = [
-                writer.register_var("logic", name, "wire", size=1)
-                for name in pin_names
-            ]
-            # Emit initial values at time 0.
-            for i, var in enumerate(vars_):
-                writer.change(var, 0, int(samples[0, i]))
+    with path.open("w") as f, _vcd.VCDWriter(f, timescale=timescale, date="today") as writer:
+        # Register one variable per pin.
+        vars_: list[Any] = [
+            writer.register_var("logic", name, "wire", size=1)
+            for name in pin_names
+        ]
+        # Emit initial values at time 0.
+        for i, var in enumerate(vars_):
+            writer.change(var, 0, int(samples[0, i]))
 
-            # Iterate samples, emit only on transitions.
-            prev = samples[0].copy()
-            for sample_idx in range(1, n_samples):
-                t = sample_idx * time_scale_factor
-                row = samples[sample_idx]
-                for pin_idx in range(n_pins):
-                    if row[pin_idx] != prev[pin_idx]:
-                        writer.change(vars_[pin_idx], t, int(row[pin_idx]))
-                prev = row.copy()
+        # Iterate samples, emit only on transitions.
+        prev = samples[0].copy()
+        for sample_idx in range(1, n_samples):
+            t = sample_idx * time_scale_factor
+            row = samples[sample_idx]
+            for pin_idx in range(n_pins):
+                if row[pin_idx] != prev[pin_idx]:
+                    writer.change(vars_[pin_idx], t, int(row[pin_idx]))
+            prev = row.copy()
