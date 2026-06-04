@@ -210,3 +210,74 @@ async def test_record_claims_released_after_stop(logic: Logic) -> None:
     await asyncio.sleep(0.05)
     await logic.record_stop(record_id=rid)
     assert logic.device.allocator.claimed_pins() == {}
+
+
+# --- VCD streaming record tests ---
+
+@pytest.mark.asyncio
+async def test_record_start_vcd_opens_vcd_writer(logic: Logic) -> None:
+    vcd = pytest.importorskip("vcd")
+    result = await logic.record_start(
+        pins=["dio0", "dio1"],
+        sample_rate_hz=1_000_000.0,
+        duration_s=0.01,
+        format="vcd",
+    )
+    record_id = result["record_id"]
+    session = logic._sessions[record_id]
+    assert session.meta["vcd_writer"] is not None
+    assert session.on_chunk_sync is not None
+    # chunks should NOT be accumulated for VCD format
+    await asyncio.sleep(0.05)
+    assert session.chunks == []
+    await logic.record_stop(record_id)
+
+
+@pytest.mark.asyncio
+async def test_record_start_vcd_on_chunk_sync_slices_pins(logic: Logic, tmp_path: Path) -> None:
+    vcd = pytest.importorskip("vcd")
+    fake: FakeBackend = logic.device.backend  # type: ignore[assignment]
+    # raw chunk has 16 channels; configured pins are dio0 and dio1 (indices 0,1)
+    raw = np.zeros((4, 16), dtype=np.uint8)
+    raw[:, 0] = [0, 1, 1, 0]
+    raw[:, 1] = [1, 1, 0, 0]
+    fake._logic_record_canned_chunk = raw
+    out_path = tmp_path / "test_stream.vcd"
+    result = await logic.record_start(
+        pins=["dio0", "dio1"],
+        sample_rate_hz=1_000_000.0,
+        duration_s=0.01,
+        format="vcd",
+        output_path=str(out_path),
+    )
+    record_id = result["record_id"]
+    await asyncio.sleep(0.05)
+    stop = await logic.record_stop(record_id)
+    assert stop["artifact_path"] == str(out_path)
+    assert out_path.exists()
+    content = out_path.read_text()
+    assert "dio0" in content
+    assert "dio1" in content
+
+
+@pytest.mark.asyncio
+async def test_record_stop_vcd_closes_writer(logic: Logic) -> None:
+    vcd = pytest.importorskip("vcd")
+    result = await logic.record_start(
+        pins=["dio0"], sample_rate_hz=1_000_000.0, duration_s=0.01, format="vcd"
+    )
+    record_id = result["record_id"]
+    session = logic._sessions[record_id]
+    vcd_w = session.meta["vcd_writer"]
+    await asyncio.sleep(0.05)
+    await logic.record_stop(record_id)
+    assert vcd_w._closed is True
+
+
+@pytest.mark.asyncio
+async def test_record_start_vcd_disabled_raises(logic: Logic) -> None:
+    logic.device.vcd_enabled = False
+    with pytest.raises(ValueError, match="VCD output is disabled"):
+        await logic.record_start(
+            pins=["dio0"], sample_rate_hz=1_000_000.0, duration_s=0.01, format="vcd"
+        )

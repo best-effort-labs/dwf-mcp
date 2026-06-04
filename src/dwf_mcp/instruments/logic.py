@@ -248,7 +248,20 @@ class Logic(Instrument):
                 "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
             )
         self.device.allocator.claim("logic", pins)
+        vcd_w: vcd_writer.VcdStreamWriter | None = None
+        vcd_path: str | None = None
         try:
+            if format == "vcd":
+                if output_path:
+                    resolved_path = Path(output_path)
+                else:
+                    resolved_path = (
+                        self.artifacts.workspace / "captures"
+                        / f"logic_{uuid.uuid4().hex[:8]}.vcd"
+                    )
+                resolved_path.parent.mkdir(parents=True, exist_ok=True)
+                vcd_w = vcd_writer.VcdStreamWriter(resolved_path, pins, sample_rate_hz)
+                vcd_path = str(resolved_path)
             self.device.backend.logic_record_configure(
                 pin_mask=_pins_to_mask(pins),
                 sample_rate_hz=sample_rate_hz,
@@ -256,11 +269,25 @@ class Logic(Instrument):
             )
             self.device.backend.logic_record_arm()
         except Exception:
+            if vcd_w is not None:
+                try:
+                    vcd_w.close()
+                except Exception:
+                    pass
             self.device.allocator.release("logic")
             raise
 
         record_id = str(uuid.uuid4())
         queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=32)
+
+        on_chunk_sync_fn: Callable[[np.ndarray], None] | None = None
+        if vcd_w is not None:
+            pin_idx = _pin_indices(pins)
+            _vcd_w = vcd_w
+            def on_chunk_sync_fn(raw_chunk: np.ndarray) -> None:  # noqa: E306
+                sliced = raw_chunk[:, pin_idx].astype(np.uint8)
+                _vcd_w.write_chunk(sliced)
+
         session = RecordingSession(
             record_id=record_id,
             task=None,
@@ -271,14 +298,14 @@ class Logic(Instrument):
             done=False,
             error=None,
             on_chunk=on_chunk,
-            on_chunk_sync=None,  # VCD wired in Task 6
+            on_chunk_sync=on_chunk_sync_fn,
             meta={
                 "pins": list(pins),
                 "sample_rate_hz": sample_rate_hz,
                 "output_path": output_path,
                 "format": format,
-                "vcd_writer": None,
-                "vcd_path": None,
+                "vcd_writer": vcd_w,
+                "vcd_path": vcd_path,
             },
         )
         try:
@@ -300,6 +327,11 @@ class Logic(Instrument):
                 self.device.backend.logic_record_stop()
             except Exception:
                 pass
+            if vcd_w is not None:
+                try:
+                    vcd_w.close()
+                except Exception:
+                    pass
             self.device.allocator.release("logic")
             raise
 
