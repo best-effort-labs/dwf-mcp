@@ -63,7 +63,7 @@ async def test_record_loop_collects_chunks_and_terminates_on_remaining_zero() ->
     def read_fn(n: int) -> np.ndarray:
         return np.zeros((n, 2), dtype=np.uint8)
     s = _session()
-    await asyncio.create_task(record_loop(s, poll_fn, read_fn))
+    await record_loop(s, poll_fn, read_fn)
     assert s.done is True
     assert s.error is None
     assert len(s.chunks) == 1
@@ -82,7 +82,7 @@ async def test_record_loop_accumulates_lost_samples() -> None:
     def read_fn(n: int) -> np.ndarray:
         return np.zeros((n, 2), dtype=np.uint8)
     s = _session()
-    await asyncio.create_task(record_loop(s, poll_fn, read_fn))
+    await record_loop(s, poll_fn, read_fn)
     assert s.lost_samples == 8
 
 
@@ -98,7 +98,7 @@ async def test_record_loop_puts_chunk_on_queue() -> None:
     def read_fn(n: int) -> np.ndarray:
         return np.zeros((n, 2), dtype=np.uint8)
     s = _session()
-    await asyncio.create_task(record_loop(s, poll_fn, read_fn))
+    await record_loop(s, poll_fn, read_fn)
     item = s.queue.get_nowait()
     assert item is not None
     assert item.shape == (3, 2)
@@ -118,7 +118,7 @@ async def test_record_loop_drops_notification_when_queue_full() -> None:
         return (0, 0, 0)
     def read_fn(n: int) -> np.ndarray:
         return np.zeros((n, 2), dtype=np.uint8)
-    await asyncio.create_task(record_loop(s, poll_fn, read_fn))
+    await record_loop(s, poll_fn, read_fn)
     assert s.error is None
     assert len(s.chunks) == 1
 
@@ -135,7 +135,7 @@ async def test_record_loop_on_chunk_sync_error_sets_error_and_done() -> None:
     def read_fn(n: int) -> np.ndarray:
         return np.zeros((n, 2), dtype=np.uint8)
     s = _session(on_chunk_sync=boom)
-    await asyncio.create_task(record_loop(s, poll_fn, read_fn))
+    await record_loop(s, poll_fn, read_fn)
     assert s.error == "write failed"
     assert s.done is True
 
@@ -147,7 +147,7 @@ async def test_record_loop_backend_exception_sets_error() -> None:
     def read_fn(n: int) -> np.ndarray:
         return np.zeros((n, 2), dtype=np.uint8)
     s = _session()
-    await asyncio.create_task(record_loop(s, poll_fn, read_fn))
+    await record_loop(s, poll_fn, read_fn)
     assert "hardware gone" in (s.error or "")
     assert s.done is True
 

@@ -24,6 +24,7 @@ class RecordingSession:
     done: bool
     error: str | None
     on_chunk: Callable[[str, np.ndarray], Awaitable[None]] | None = None
+    # on_chunk: async callback for lifecycle tracking (spec-required for MCP notifications).
     on_chunk_sync: Callable[[np.ndarray], None] | None = None
     # on_chunk_sync: called synchronously per chunk before queue put.
     # When set, chunks are NOT appended to session.chunks (write-through for VCD).
@@ -31,7 +32,6 @@ class RecordingSession:
 
 
 def process_chunk(session: RecordingSession, chunk: np.ndarray) -> None:
-    """Route chunk to on_chunk_sync (VCD write-through) or chunks list (npz accumulation)."""
     if session.on_chunk_sync is not None:
         session.on_chunk_sync(chunk)
     else:
@@ -43,11 +43,6 @@ async def record_loop(
     poll_fn: Callable[[], tuple[int, int, int]],
     read_fn: Callable[[int], np.ndarray],
 ) -> None:
-    """Hardware poll loop. Reads chunks, routes via process_chunk, and puts on queue.
-
-    poll_fn() -> (available, lost, remaining)
-    read_fn(n) -> np.ndarray of n samples
-    """
     try:
         while not session.done:
             await asyncio.sleep(0.010)
@@ -82,16 +77,11 @@ async def notification_loop(
     session: RecordingSession,
     on_chunk: Callable[[str, np.ndarray], Awaitable[None]],
 ) -> None:
-    """MCP notification delivery loop. Consumes queue and calls on_chunk per item.
-
-    Notification exceptions are logged and swallowed — they never stop recording.
-    Exits when None sentinel is received.
-    """
     while True:
         item = await session.queue.get()
         if item is None:
             break
         try:
             await on_chunk(session.record_id, item)
-        except Exception:
+        except Exception:  # swallow; never block recording
             log.warning("notification send failed for record_id=%r", session.record_id)
