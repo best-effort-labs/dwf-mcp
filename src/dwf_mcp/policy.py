@@ -41,3 +41,16 @@ class SafetyPolicy:
                 f"AWG amplitude {amplitude} V exceeds policy cap "
                 f"{self.awg_max_amplitude} V"
             )
+
+    def check_pattern_voltage(self) -> None:
+        try:
+            voltage = float(self.pattern_voltage)
+        except (ValueError, TypeError):
+            raise SafetyViolation(
+                f"policy.pattern_voltage {self.pattern_voltage!r} is not a valid number"
+            )
+        if voltage != 3.3:
+            raise SafetyViolation(
+                f"AD3 DIO is fixed at 3.3 V; policy.pattern_voltage={self.pattern_voltage!r} "
+                f"cannot be satisfied by hardware"
+            )

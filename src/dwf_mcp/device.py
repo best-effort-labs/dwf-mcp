@@ -130,6 +130,8 @@ class DwfDevice:
                     f"awg_start requires numeric amplitude, got {type(amplitude).__name__}"
                 )
             self.policy.check_awg_amplitude(float(amplitude))
+        elif kind == "pattern_start":
+            self.policy.check_pattern_voltage()
         # Unknown kinds pass through (forward-compat for stage 3 kinds).
 
     def _append_safety_log(

@@ -326,3 +326,43 @@ class PydwfBackend(DwfBackend):
 
     def awg_stop(self, channel: int) -> None:
         self._analog_out.configure(channel - 1, False)
+
+    # --- Pattern (DigitalOut) -----------------------------------------------
+
+    @property
+    def _digital_out(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.digitalOut
+
+    def pattern_configure(
+        self, pin_idx: int, function: str, freq_hz: float,
+        duty: float, idle_state: str,
+    ) -> None:
+        from pydwf import (  # type: ignore[import-untyped]
+            DwfDigitalOutIdle, DwfDigitalOutType,
+        )
+        dout = self._digital_out
+        type_map = {
+            "Pulse":  DwfDigitalOutType.Pulse,
+            "Clock":  DwfDigitalOutType.Clock,
+            "Random": DwfDigitalOutType.Random,
+            "Custom": DwfDigitalOutType.Custom,
+        }
+        idle_map = {
+            "low":  DwfDigitalOutIdle.Low,
+            "high": DwfDigitalOutIdle.High,
+            "hiz":  DwfDigitalOutIdle.Init,  # Init = Hi-Z on AD3
+        }
+        dout.enableSet(pin_idx, True)
+        dout.typeSet(pin_idx, type_map[function])
+        dout.frequencySet(pin_idx, freq_hz)
+        dout.dutyCycleSet(pin_idx, duty)
+        dout.idleSet(pin_idx, idle_map[idle_state])
+
+    def pattern_start(self, pin_idx: int) -> None:
+        self._digital_out.configure(True)
+
+    def pattern_stop(self, pin_idx: int) -> None:
+        self._digital_out.enableSet(pin_idx, False)
+        self._digital_out.configure(False)
