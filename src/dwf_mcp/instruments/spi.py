@@ -47,17 +47,7 @@ SPI_TRANSFER_SCHEMA: dict[str, Any] = {
     },
 }
 
-SPI_WRITE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "required": ["data"],
-    "properties": {
-        "data": {
-            "type": "array",
-            "items": {"type": "integer", "minimum": 0, "maximum": 255},
-        },
-        "assert_cs": {"type": "boolean", "default": True},
-    },
-}
+SPI_WRITE_SCHEMA = SPI_TRANSFER_SCHEMA
 
 SPI_READ_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -126,6 +116,8 @@ class SPI(Instrument):
             "clk_pin": clk_pin,
             "frequency_hz": frequency_hz,
             "mode": mode,
+            "cs_polarity": cs_polarity,
+            "bit_order": bit_order,
         }
 
     def transfer(self, data: list[int], assert_cs: bool = True) -> dict[str, Any]:
