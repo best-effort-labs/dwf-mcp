@@ -55,6 +55,8 @@ dmm.measure(channel, range_v, coupling="DC", n_averages=64)
 
 **AnalogIn exclusivity:** AnalogIn has a single shared acquisition engine — sample rate, buffer size, mode, and trigger are global across channels. DMM reconfiguring AnalogIn while a scope acquisition is armed would corrupt the scope state. DMM therefore claims both `scope1` and `scope2`, making it mutually exclusive with any scope operation. The `scope_pair` non-exclusive group does not help here — it allows two instruments to each hold a pin, but not to share the underlying hardware configuration. Document this constraint in `dmm.py` docstring.
 
+**AnalogIn disarm on cleanup:** The `finally` block calls `backend.dmm_stop()` before `allocator.release("dmm")` to disarm AnalogIn even on timeout. Without this, a timed-out acquisition remains active in hardware and collides with a subsequent scope configure.
+
 #### Backend surface
 
 ```python
@@ -62,6 +64,7 @@ dmm_configure(channel: int, range_v: float, coupling: str, n_averages: int) -> N
 dmm_arm() -> None
 dmm_status() -> str          # "Done", "Armed", etc.
 dmm_read(channel: int, count: int) -> np.ndarray   # float64
+dmm_stop() -> None           # disarms AnalogIn; called in finally before release
 ```
 
 ---
@@ -83,6 +86,15 @@ spi.read(length, assert_cs=True)     → {data: [...], data_hex: str}
 `mode`: 0–3 (CPOL/CPHA). `data` in write/transfer/read: list of ints (0–255).
 
 `assert_cs=False` means "do not assert or deassert CS within this transfer" — useful for chaining multiple back-to-back transfers while holding CS low. It does **not** route CS to a DIO instrument; SPI holds its configured `cs_pin` for its entire session. To control CS externally (e.g., via DIO), omit `cs_pin` from `spi.configure()` entirely — then no CS pin is claimed and DIO can drive it freely.
+
+**Per-operation pin requirements** — raises `InstrumentNotConfigured` with a descriptive message if the required pin was not provided at configure time:
+
+| Tool | Requires |
+|---|---|
+| `spi.transfer()` | `mosi_pin` and `miso_pin` |
+| `spi.write()` | `mosi_pin` |
+| `spi.read()` | `miso_pin` |
+| `spi.transfer/write/read()` with `assert_cs=True` | `cs_pin` |
 
 #### Pin allocation
 
@@ -116,6 +128,13 @@ uart.read(length, timeout_s=1.0)     → {data: [...], data_hex: str, parity_err
 `parity`: `"none"`, `"odd"`, `"even"`. `data` is list of ints. At least one of `tx_pin` / `rx_pin` must be provided; configure raises `ValueError` if both are `None`.
 
 `uart.read` returns whatever bytes were received before the timeout — may be fewer than `length`. Callers must check `len(data)`. Empty `data` on timeout is not an error.
+
+**Per-operation pin requirements** — raises `InstrumentNotConfigured` with a descriptive message if the required pin was not configured:
+
+| Tool | Requires |
+|---|---|
+| `uart.write()` | `tx_pin` configured |
+| `uart.read()` | `rx_pin` configured |
 
 #### Backend surface
 
@@ -182,9 +201,22 @@ class RecordingSession:
     # scope: {"channels", "range_v", "sample_rate_hz", "output_path"}
 ```
 
-**Queue design:** `asyncio.Queue(maxsize=32)`. The poll loop uses `put_nowait`; if the queue is full, the chunk is dropped from the notification path (the chunk is still processed for artifact assembly). A dropped notification is not an error — it means the client is not consuming fast enough.
+**Queue design:** `asyncio.Queue(maxsize=32)`. The poll loop uses `put_nowait`; if the queue is full the chunk is dropped from the notification path (recording is unaffected). A dropped notification is not an error.
 
-**Two-task design:** The poll loop and the notification delivery run as separate tasks so that a slow or disconnected MCP client cannot block hardware polling.
+**Two-task design:** The poll loop and notification delivery run as separate tasks so a slow or disconnected MCP client cannot block hardware polling.
+
+**`process_chunk` helper:** Used by both the poll loop and the drain in `record_stop` to ensure consistent chunk handling:
+
+```python
+def process_chunk(session: RecordingSession, chunk: np.ndarray) -> None:
+    """Route chunk to on_chunk_sync (VCD write-through) or chunks list (npz accumulation)."""
+    if session.on_chunk_sync is not None:
+        session.on_chunk_sync(chunk)   # may raise; caller sets session.error on exception
+    else:
+        session.chunks.append(chunk)
+```
+
+The notification queue put is separate and only in `record_loop` (not the drain path, since the notification task is cancelled before draining).
 
 ```python
 async def record_loop(
@@ -199,15 +231,12 @@ async def record_loop(
             session.lost_samples += lost
             if available > 0:
                 chunk = read_fn(available)
-                if session.on_chunk_sync is not None:
-                    try:
-                        session.on_chunk_sync(chunk)
-                    except Exception as exc:
-                        session.error = str(exc)
-                        session.done = True
-                        return
-                else:
-                    session.chunks.append(chunk)
+                try:
+                    process_chunk(session, chunk)
+                except Exception as exc:
+                    session.error = str(exc)
+                    session.done = True
+                    return
                 try:
                     session.queue.put_nowait(chunk)
                 except asyncio.QueueFull:
@@ -220,7 +249,7 @@ async def record_loop(
         session.error = str(exc)
         session.done = True
     finally:
-        # Signal notification task to stop after draining remaining items.
+        # Best-effort sentinel; record_stop cancels notification_task explicitly.
         with contextlib.suppress(asyncio.QueueFull):
             session.queue.put_nowait(None)
 
@@ -246,9 +275,13 @@ if on_chunk is not None:
     session.notification_task = asyncio.create_task(notification_loop(session, on_chunk))
 ```
 
-`record_stop` cancels both tasks (notification task after record loop finishes draining).
+`record_stop` cancels both tasks explicitly — it does not rely solely on the sentinel for notification task cleanup.
 
-`logic.py` is updated to import `RecordingSession`, `record_loop`, and `notification_loop` from `streaming.py`. Its `_RecordingSession` dataclass and `_record_loop` method are deleted. All existing behavior is preserved; the migration is mechanical.
+`logic.py` is updated to import `RecordingSession`, `process_chunk`, `record_loop`, and `notification_loop` from `streaming.py`. Its `_RecordingSession` dataclass and `_record_loop` method are deleted.
+
+**Logic `record_start` rollback:** same pattern as scope (see below) — on backend or task creation failure, cancel tasks in reverse, `backend.logic_record_stop()`, close VCD writer, `allocator.release("logic")`.
+
+**Logic `record_stop` exception-safety:** same `try/finally` pattern as scope — cleanup in `finally` regardless of backend/drain/artifact errors.
 
 ### `scope.record` — three new tools on `Scope`
 
@@ -270,26 +303,57 @@ scope.record_stop(record_id)
 
 #### Scope state machine
 
-`Scope` gains `_mode: Literal[None, "buffer", "record"] = None`. The allocator alone does not prevent the same instrument instance from entering both modes simultaneously (an owner can re-claim its own slot). Explicit state is required:
+`Scope` gains `_mode: Literal[None, "buffer", "record"] = None`. The allocator alone does not prevent the same instrument instance from entering both modes simultaneously (an owner can re-claim its own slot). Explicit state is required.
 
-- `configure()` raises `RuntimeError` if `_mode == "record"` ("scope.record_stop must be called before reconfiguring buffer mode")
-- `record_start()` raises `RuntimeError` if `_mode == "buffer"` ("scope.release or scope.record_stop must be called before starting a record")
-- `capture()` requires `_mode == "buffer"`
-- `record_stop()` resets `_mode = None` and releases the pin claim
-- `release()` resets `_mode = None`
+Valid transitions:
+
+| From `_mode` | `configure()` | `record_start()` |
+|---|---|---|
+| `None` | → `"buffer"` ✓ | → `"record"` ✓ |
+| `"buffer"` | → `"buffer"` ✓ (replace config) | → `"record"` ✓ (implicit buffer release) |
+| `"record"` | ✗ raises `RuntimeError` | ✗ raises `RuntimeError` |
+
+Buffer mode has no active task — it is safe to overwrite or replace with a record session. `record_start()` when `_mode == "buffer"` implicitly releases the buffer config (`allocator.release("scope")`, `_config = None`, `_mode = None`) before proceeding with record setup. This matches how `logic.configure()` replaces a prior config.
+
+Record mode has an active background task and possibly an open VCD writer. Neither `configure()` nor `record_start()` may enter while `_mode == "record"`. The caller must call `scope.record_stop(record_id)` first.
+
+- `capture()`: requires `_mode == "buffer"`, raises `InstrumentNotConfigured` otherwise
+- `record_status()` / `record_stop()`: require `_mode == "record"`, raise `ValueError` for unknown record_id
+- `release()`: cancels any active record tasks, resets `_mode = None`, releases claim
 
 #### Pin allocation
 
 `allocator.claim("scope", [f"scope{c}" for c in channels])` — same allocator slot as buffer-mode scope. The `_mode` state machine above enforces mutual exclusivity between the two paths; the allocator claim prevents other instruments from using the same pins.
 
-#### record_stop sequence
+#### record_start rollback
 
-1. Cancel background task
-2. `backend.scope_record_stop()`
-3. Drain remaining samples: `scope_record_status()` + `scope_record_read()`
-4. Concatenate chunks → `(total_samples, 2)` float64; slice to configured channels
-5. Write npz artifact (best-effort; `artifact_error` in response on failure)
-6. Remove session, `allocator.release("scope")`
+If any step fails after resources are acquired, clean up in reverse:
+1. `allocator.claim("scope", ...)` — if fails: nothing to clean up
+2. If VCD format: `VcdStreamWriter.__init__()` — if fails: `allocator.release("scope")`
+3. `backend.scope_record_configure()` — if fails: close writer if open, `allocator.release("scope")`
+4. `backend.scope_record_arm()` — same cleanup as step 3
+5. `asyncio.create_task(record_loop)` — if fails: `backend.scope_record_stop()`, close writer, `allocator.release("scope")`
+6. `asyncio.create_task(notification_loop)` — if fails: cancel record_loop task, `backend.scope_record_stop()`, close writer, `allocator.release("scope")`
+
+#### record_stop sequence (exception-safe)
+
+```
+try:
+    1. Cancel and await record_loop task
+    2. Cancel and await notification_task (explicit cancel, not sentinel-reliant)
+    3. backend.scope_record_stop()       [log warning on failure, continue]
+    4. Drain: scope_record_status() + scope_record_read() → process_chunk() per chunk
+    5. Write artifact (best-effort; set artifact_error on exception)
+except Exception:
+    [all exceptions are swallowed here; errors reported in response fields]
+finally:
+    6. Close VCD writer if open (suppress exception)
+    7. Remove session from self._sessions
+    8. allocator.release("scope")
+    9. self._mode = None
+```
+
+Cleanup in `finally` always runs regardless of exceptions in steps 1–5. Errors from backend stop/drain are logged but not surfaced in the response — only `error` (from acquisition) and `artifact_error` (from artifact write) are returned.
 
 #### Backend additions
 
@@ -389,6 +453,8 @@ For npz format, `on_chunk_sync` is `None` and `session.chunks` accumulates as be
 - npz format: concatenate `session.chunks`, write npz as before
 
 The existing `vcd_writer.write()` one-shot function is unchanged — still used by `logic.capture` (buffer-mode).
+
+**Sync I/O tradeoff:** `on_chunk_sync` runs in the hardware poll loop, so disk write latency directly delays the next `analogIn`/`digitalIn` status poll. For local SSDs, VCD transition writes are typically sub-millisecond and this is acceptable. VCD recording is not recommended over network filesystems or slow storage — use npz format in those environments. A future optimization could offload VCD writes to a dedicated bounded task, but that re-introduces double-buffering and is deferred.
 
 ---
 
