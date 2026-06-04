@@ -453,3 +453,31 @@ class PydwfBackend(DwfBackend):
         for bit in range(16):
             result[:, bit] = (arr >> bit) & 1
         return result
+
+    # --- Logic record-mode (DigitalIn streaming) ----------------------------
+
+    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float) -> None:
+        from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
+        din = self._digital_in
+        divider = max(1, round(100_000_000 / sample_rate_hz))
+        din.dividerSet(divider)
+        din.acquisitionModeSet(DwfAcquisitionMode.Record)
+
+    def logic_record_arm(self) -> None:
+        self._digital_in.configure(False, True)
+
+    def logic_record_status(self) -> tuple[int, int, int]:
+        din = self._digital_in
+        din.status(True)
+        return tuple(din.statusRecord())  # type: ignore[return-value]
+
+    def logic_record_read(self, count: int) -> np.ndarray:
+        raw = self._digital_in.statusData2(count)
+        arr = np.array(raw, dtype=np.uint16)
+        result = np.zeros((len(arr), 16), dtype=np.uint8)
+        for bit in range(16):
+            result[:, bit] = (arr >> bit) & 1
+        return result
+
+    def logic_record_stop(self) -> None:
+        self._digital_in.configure(False, False)

@@ -6,6 +6,7 @@ import dataclasses
 import logging
 import time
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -239,16 +240,133 @@ class Logic(Instrument):
         )
         return {"path": result.path, "sidecar_path": result.sidecar_path, "format": "npz", "n_samples": samples.shape[0]}
 
-    # --- Streaming stubs (implemented in Task 7) ---
+    # --- Streaming (record) ---
 
-    async def record_start(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise NotImplementedError("record_start is implemented in Task 7")
+    async def record_start(
+        self,
+        pins: list[str],
+        sample_rate_hz: float,
+        duration_s: float,
+        output_path: str | None = None,
+        format: str = "npz",
+    ) -> dict[str, Any]:
+        if format not in _VALID_FORMATS:
+            raise ValueError(f"format must be one of {sorted(_VALID_FORMATS)}, got {format!r}")
+        if format == "vcd" and not vcd_writer.HAS_VCD:
+            raise ImportError(
+                "VCD format requires the 'pyvcd' package: pip install dwf-mcp[vcd]"
+            )
+        self.device.allocator.claim("logic", pins)
+        try:
+            self.device.backend.logic_record_configure(
+                pin_mask=_pins_to_mask(pins),
+                sample_rate_hz=sample_rate_hz,
+            )
+            self.device.backend.logic_record_arm()
+        except Exception:
+            self.device.allocator.release("logic")
+            raise
+        record_id = str(uuid.uuid4())
+        queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
+        session = _RecordingSession(
+            record_id=record_id,
+            task=None,  # type: ignore[arg-type]  — filled below
+            queue=queue,
+            chunks=[],
+            pins=list(pins),
+            sample_rate_hz=sample_rate_hz,
+            output_path=output_path,
+            format=format,
+            lost_samples=0,
+            done=False,
+            error=None,
+        )
+        session.task = asyncio.create_task(self._record_loop(session))
+        self._sessions[record_id] = session
+        return {"record_id": record_id}
+
+    async def _record_loop(self, session: _RecordingSession) -> None:
+        try:
+            while not session.done:
+                await asyncio.sleep(0.010)
+                available, lost, remaining = self.device.backend.logic_record_status()
+                session.lost_samples += lost
+                if available > 0:
+                    chunk = self.device.backend.logic_record_read(available)
+                    session.chunks.append(chunk)
+                    await session.queue.put(chunk)
+                if remaining == 0:
+                    session.done = True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            session.error = str(exc)
+            session.done = True
 
     def record_status(self, record_id: str) -> dict[str, Any]:
-        raise NotImplementedError("record_status is implemented in Task 7")
+        session = self._sessions.get(record_id)
+        if session is None:
+            raise ValueError(f"unknown record_id {record_id!r}")
+        return {
+            "record_id": record_id,
+            "done": session.done,
+            "chunks_received": len(session.chunks),
+            "lost_samples": session.lost_samples,
+            "error": session.error,
+        }
 
     async def record_stop(self, record_id: str) -> dict[str, Any]:
-        raise NotImplementedError("record_stop is implemented in Task 7")
+        session = self._sessions.get(record_id)
+        if session is None:
+            raise ValueError(f"unknown record_id {record_id!r}")
+        # 1. Cancel the background task.
+        session.task.cancel()
+        with suppress(asyncio.CancelledError):
+            await session.task
+        # 2. Stop hardware acquisition.
+        try:
+            self.device.backend.logic_record_stop()
+        except Exception as exc:
+            log.warning("logic_record_stop failed: %s", exc)
+        # 3. Drain any remaining available samples.
+        try:
+            available, lost, _ = self.device.backend.logic_record_status()
+            session.lost_samples += lost
+            if available > 0:
+                chunk = self.device.backend.logic_record_read(available)
+                session.chunks.append(chunk)
+        except Exception as exc:
+            log.warning("drain after record_stop failed: %s", exc)
+        # 4. Write artifact (best-effort).
+        artifact_path: str | None = None
+        artifact_error: str | None = None
+        if session.chunks:
+            try:
+                all_raw = np.concatenate(session.chunks, axis=0)
+                pin_indices = _pin_indices(session.pins)
+                samples = all_raw[:, pin_indices].astype(np.uint8)
+                result_dict = self._write_artifact(
+                    samples=samples,
+                    pin_names=session.pins,
+                    sample_rate_hz=session.sample_rate_hz,
+                    output_path=session.output_path,
+                    format=session.format,
+                )
+                artifact_path = result_dict.get("path")
+            except Exception as exc:
+                log.exception("artifact write failed for record_id=%r", record_id)
+                artifact_error = str(exc)
+        # 5. Remove session.
+        del self._sessions[record_id]
+        # 6. Release pin claim.
+        self.device.allocator.release("logic")
+        return {
+            "record_id": record_id,
+            "artifact_path": artifact_path,
+            "lost_samples": session.lost_samples,
+            "error": session.error,
+            "artifact_error": artifact_error,
+        }
 
     def release(self) -> None:
         for session in list(self._sessions.values()):
