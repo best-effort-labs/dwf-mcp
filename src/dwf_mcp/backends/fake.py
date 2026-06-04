@@ -54,6 +54,21 @@ class FakeBackend(DwfBackend):
         self._logic_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
         self._logic_record_status_idx = 0
         self._logic_record_canned_chunk: np.ndarray = np.zeros((10, 16), dtype=np.uint8)
+        # DMM (AnalogIn measurement) state
+        self.dmm_calls: list[tuple[str, dict[str, Any]]] = []
+        self._dmm_status_sequence: list[str] = ["Done"]
+        self._dmm_status_idx = 0
+        self._dmm_canned_data: dict[int, np.ndarray] = {}
+        # SPI (ProtocolSPI) state
+        self.spi_calls: list[tuple[str, dict[str, Any]]] = []
+        self._spi_canned_rx: bytes = b""
+        # UART (ProtocolUART) state
+        self.uart_calls: list[tuple[str, dict[str, Any]]] = []
+        self._uart_canned_rx: bytes = b""
+        self._uart_parity_error: bool = False
+        # CAN (ProtocolCAN) state
+        self.can_calls: list[tuple[str, dict[str, Any]]] = []
+        self._can_canned_frame: tuple[int | None, bytes, bool, int] = (None, b"", False, 0)
 
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
@@ -298,3 +313,112 @@ class FakeBackend(DwfBackend):
     ) -> None:
         self._logic_record_status_sequence = list(sequence)
         self._logic_record_status_idx = 0
+
+    # --- DMM (AnalogIn measurement) ---
+
+    def dmm_configure(self, channel: int, range_v: float, coupling: str, n_averages: int) -> None:
+        self.dmm_calls.append(("configure", {
+            "channel": channel, "range_v": range_v,
+            "coupling": coupling, "n_averages": n_averages,
+        }))
+        self._dmm_status_idx = 0
+
+    def dmm_arm(self) -> None:
+        self.dmm_calls.append(("arm", {}))
+
+    def dmm_status(self) -> str:
+        idx = min(self._dmm_status_idx, len(self._dmm_status_sequence) - 1)
+        result = self._dmm_status_sequence[idx]
+        self._dmm_status_idx += 1
+        return result
+
+    def dmm_read(self, channel: int, count: int) -> np.ndarray:
+        if channel in self._dmm_canned_data:
+            return self._dmm_canned_data[channel][:count]
+        return np.full(count, 1.5, dtype=np.float64)
+
+    def dmm_stop(self) -> None:
+        self.dmm_calls.append(("stop", {}))
+
+    # Test helpers
+    def set_dmm_canned_data(self, channel: int, data: np.ndarray) -> None:
+        self._dmm_canned_data[channel] = data
+
+    def set_dmm_status_sequence(self, seq: list[str]) -> None:
+        self._dmm_status_sequence = list(seq)
+        self._dmm_status_idx = 0
+
+    # --- SPI (ProtocolSPI) ---
+
+    def spi_configure(
+        self, clk_idx: int, freq_hz: float, mode: int,
+        mosi_idx: int | None, miso_idx: int | None, cs_idx: int | None,
+        cs_polarity: str, bit_order: str,
+    ) -> None:
+        self.spi_calls.append(("configure", {
+            "clk_idx": clk_idx, "freq_hz": freq_hz, "mode": mode,
+            "mosi_idx": mosi_idx, "miso_idx": miso_idx, "cs_idx": cs_idx,
+            "cs_polarity": cs_polarity, "bit_order": bit_order,
+        }))
+
+    def spi_transfer(self, data: bytes, assert_cs: bool) -> bytes:
+        self.spi_calls.append(("transfer", {"data": data, "assert_cs": assert_cs}))
+        if self._spi_canned_rx:
+            return self._spi_canned_rx[: len(data)]
+        return bytes(len(data))
+
+    def spi_write(self, data: bytes, assert_cs: bool) -> None:
+        self.spi_calls.append(("write", {"data": data, "assert_cs": assert_cs}))
+
+    def spi_read(self, length: int, assert_cs: bool) -> bytes:
+        self.spi_calls.append(("read", {"length": length, "assert_cs": assert_cs}))
+        if self._spi_canned_rx:
+            return self._spi_canned_rx[:length]
+        return bytes(length)
+
+    # Test helper
+    def set_spi_canned_rx(self, data: bytes) -> None:
+        self._spi_canned_rx = data
+
+    # --- UART (ProtocolUART) ---
+
+    def uart_configure(
+        self, baud_rate: int, tx_idx: int | None, rx_idx: int | None,
+        data_bits: int, parity: str, stop_bits: int,
+    ) -> None:
+        self.uart_calls.append(("configure", {
+            "baud_rate": baud_rate, "tx_idx": tx_idx, "rx_idx": rx_idx,
+            "data_bits": data_bits, "parity": parity, "stop_bits": stop_bits,
+        }))
+
+    def uart_write(self, data: bytes) -> None:
+        self.uart_calls.append(("write", {"data": data}))
+
+    def uart_read(self, length: int, timeout_s: float) -> tuple[bytes, bool]:
+        self.uart_calls.append(("read", {"length": length, "timeout_s": timeout_s}))
+        return self._uart_canned_rx[:length], self._uart_parity_error
+
+    # Test helpers
+    def set_uart_canned_rx(self, data: bytes, parity_error: bool = False) -> None:
+        self._uart_canned_rx = data
+        self._uart_parity_error = parity_error
+
+    # --- CAN (ProtocolCAN) ---
+
+    def can_configure(self, tx_idx: int, rx_idx: int, bit_rate: int) -> None:
+        self.can_calls.append(("configure", {
+            "tx_idx": tx_idx, "rx_idx": rx_idx, "bit_rate": bit_rate,
+        }))
+
+    def can_send(self, id: int, data: bytes, extended: bool) -> None:
+        self.can_calls.append(("send", {"id": id, "data": data, "extended": extended}))
+
+    def can_receive(self, timeout_s: float) -> tuple[int | None, bytes, bool, int]:
+        self.can_calls.append(("receive", {"timeout_s": timeout_s}))
+        return self._can_canned_frame
+
+    # Test helper
+    def set_can_canned_frame(
+        self, id: int | None, data: bytes, extended: bool, error_count: int
+    ) -> None:
+        self._can_canned_frame = (id, data, extended, error_count)

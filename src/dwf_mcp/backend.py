@@ -172,3 +172,59 @@ class DwfBackend(ABC):
 
     def logic_record_stop(self) -> None:
         raise NotImplementedError
+
+    # DMM (AnalogIn measurement) — added in stage 3b.
+    def dmm_configure(self, channel: int, range_v: float, coupling: str, n_averages: int) -> None:
+        raise NotImplementedError
+
+    def dmm_arm(self) -> None:
+        raise NotImplementedError
+
+    def dmm_status(self) -> str:
+        raise NotImplementedError
+
+    def dmm_read(self, channel: int, count: int) -> np.ndarray:
+        raise NotImplementedError
+
+    def dmm_stop(self) -> None:
+        raise NotImplementedError
+
+    # SPI (ProtocolSPI) — added in stage 3b.
+    def spi_configure(
+        self, clk_idx: int, freq_hz: float, mode: int,
+        mosi_idx: int | None, miso_idx: int | None, cs_idx: int | None,
+        cs_polarity: str, bit_order: str,
+    ) -> None:
+        raise NotImplementedError
+
+    def spi_transfer(self, data: bytes, assert_cs: bool) -> bytes:
+        raise NotImplementedError
+
+    def spi_write(self, data: bytes, assert_cs: bool) -> None:
+        raise NotImplementedError
+
+    def spi_read(self, length: int, assert_cs: bool) -> bytes:
+        raise NotImplementedError
+
+    # UART (ProtocolUART) — added in stage 3b.
+    def uart_configure(
+        self, baud_rate: int, tx_idx: int | None, rx_idx: int | None,
+        data_bits: int, parity: str, stop_bits: int,
+    ) -> None:
+        raise NotImplementedError
+
+    def uart_write(self, data: bytes) -> None:
+        raise NotImplementedError
+
+    def uart_read(self, length: int, timeout_s: float) -> tuple[bytes, bool]:
+        raise NotImplementedError
+
+    # CAN (ProtocolCAN) — added in stage 3b.
+    def can_configure(self, tx_idx: int, rx_idx: int, bit_rate: int) -> None:
+        raise NotImplementedError
+
+    def can_send(self, id: int, data: bytes, extended: bool) -> None:
+        raise NotImplementedError
+
+    def can_receive(self, timeout_s: float) -> tuple[int | None, bytes, bool, int]:
+        raise NotImplementedError
