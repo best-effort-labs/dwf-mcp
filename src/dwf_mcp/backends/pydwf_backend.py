@@ -184,6 +184,49 @@ class PydwfBackend(DwfBackend):
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
         return np.asarray(self._analog_in.statusData(channel - 1, count), dtype=np.float64)
 
+    # Scope record-mode (AnalogIn streaming) — added in stage 3b.
+
+    def scope_record_configure(
+        self,
+        channels: list[int],
+        range_v: float,
+        offset_v: float,
+        coupling: str,
+        sample_rate_hz: float,
+        duration_s: float,
+    ) -> None:
+        from pydwf.core.auxiliary.enum_types import DwfAcquisitionMode, DwfAnalogInCoupling
+        coupling_map = {
+            "DC": DwfAnalogInCoupling.DC,
+            "AC": DwfAnalogInCoupling.AC,
+        }
+        ai = self._analog_in
+        for ch in (0, 1):  # 0-indexed; channels list uses 1-indexed
+            ai.channelEnableSet(ch, (ch + 1) in channels)
+            ai.channelRangeSet(ch, range_v)
+            ai.channelOffsetSet(ch, offset_v)
+            ai.channelCouplingSet(ch, coupling_map[coupling])
+        ai.frequencySet(sample_rate_hz)
+        ai.acquisitionModeSet(DwfAcquisitionMode.Record)
+        ai.recordLengthSet(duration_s)
+
+    def scope_record_arm(self) -> None:
+        self._analog_in.configure(False, True)
+
+    def scope_record_status(self) -> tuple[int, int, int]:
+        self._analog_in.status(True)
+        available, lost, remaining = self._analog_in.statusRecord()
+        return int(available), int(lost), int(remaining)
+
+    def scope_record_read(self, count: int) -> np.ndarray:
+        ai = self._analog_in
+        ch1 = ai.statusData(0, count)
+        ch2 = ai.statusData(1, count)
+        return np.column_stack([ch1, ch2]).astype(np.float64)
+
+    def scope_record_stop(self) -> None:
+        self._analog_in.reset()
+
     # --- Supply (AnalogIO) --------------------------------------------------
 
     @property
