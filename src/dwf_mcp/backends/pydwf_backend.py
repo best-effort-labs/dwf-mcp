@@ -364,5 +364,6 @@ class PydwfBackend(DwfBackend):
         self._digital_out.configure(True)
 
     def pattern_stop(self, pin_idx: int) -> None:
+        # configure(False) stops the global DigitalOut engine — all other running pins halt too.
         self._digital_out.enableSet(pin_idx, False)
         self._digital_out.configure(False)
