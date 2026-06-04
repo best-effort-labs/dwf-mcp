@@ -456,12 +456,13 @@ class PydwfBackend(DwfBackend):
 
     # --- Logic record-mode (DigitalIn streaming) ----------------------------
 
-    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float) -> None:
+    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
         from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
         din = self._digital_in
         divider = max(1, round(100_000_000 / sample_rate_hz))
         din.dividerSet(divider)
         din.acquisitionModeSet(DwfAcquisitionMode.Record)
+        din.recordLengthSet(duration_s)
 
     def logic_record_arm(self) -> None:
         self._digital_in.configure(False, True)

@@ -97,7 +97,7 @@ LOGIC_RECORD_ID_SCHEMA: dict[str, Any] = {
 @dataclasses.dataclass
 class _RecordingSession:
     record_id: str
-    task: asyncio.Task[Any]
+    task: asyncio.Task[Any] | None
     queue: asyncio.Queue[Any]  # streaming seam for future MCP notifications
     chunks: list[np.ndarray]
     pins: list[str]
@@ -261,6 +261,7 @@ class Logic(Instrument):
             self.device.backend.logic_record_configure(
                 pin_mask=_pins_to_mask(pins),
                 sample_rate_hz=sample_rate_hz,
+                duration_s=duration_s,
             )
             self.device.backend.logic_record_arm()
         except Exception:
@@ -270,7 +271,7 @@ class Logic(Instrument):
         queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
         session = _RecordingSession(
             record_id=record_id,
-            task=None,  # type: ignore[arg-type]  — filled below
+            task=None,
             queue=queue,
             chunks=[],
             pins=list(pins),
@@ -320,9 +321,10 @@ class Logic(Instrument):
         if session is None:
             raise ValueError(f"unknown record_id {record_id!r}")
         # 1. Cancel the background task.
-        session.task.cancel()
-        with suppress(asyncio.CancelledError):
-            await session.task
+        if session.task is not None:
+            session.task.cancel()
+            with suppress(asyncio.CancelledError):
+                await session.task
         # 2. Stop hardware acquisition.
         try:
             self.device.backend.logic_record_stop()
@@ -370,7 +372,8 @@ class Logic(Instrument):
 
     def release(self) -> None:
         for session in list(self._sessions.values()):
-            session.task.cancel()
+            if session.task is not None:
+                session.task.cancel()
         self._sessions.clear()
         self.device.allocator.release("logic")
         self._config = None

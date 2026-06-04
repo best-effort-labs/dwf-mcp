@@ -267,9 +267,9 @@ class FakeBackend(DwfBackend):
 
     # --- Logic record-mode ---
 
-    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float) -> None:
+    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
         self.logic_calls.append(("record_configure", {
-            "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz,
+            "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz, "duration_s": duration_s,
         }))
         self._logic_record_status_idx = 0
 
