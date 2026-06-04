@@ -367,3 +367,35 @@ class PydwfBackend(DwfBackend):
         # configure(False) stops the global DigitalOut engine — all other running pins halt too.
         self._digital_out.enableSet(pin_idx, False)
         self._digital_out.configure(False)
+
+    # --- DIO (DigitalIO) ----------------------------------------------------
+
+    @property
+    def _digital_io(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.digitalIO
+
+    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
+        dio = self._digital_io
+        current_mask = int(dio.outputEnableGet())
+        if output:
+            new_mask = current_mask | (1 << pin_idx)
+        else:
+            new_mask = current_mask & ~(1 << pin_idx)
+        dio.outputEnableSet(new_mask)
+
+    def dio_set(self, pin_idx: int, state: bool) -> None:
+        dio = self._digital_io
+        current_out = int(dio.outputGet())
+        if state:
+            new_out = current_out | (1 << pin_idx)
+        else:
+            new_out = current_out & ~(1 << pin_idx)
+        dio.outputSet(new_out)
+
+    def dio_read(self, pin_idx: int) -> bool:
+        dio = self._digital_io
+        dio.status()  # refresh input state
+        input_mask = int(dio.inputStatus())
+        return bool(input_mask & (1 << pin_idx))
