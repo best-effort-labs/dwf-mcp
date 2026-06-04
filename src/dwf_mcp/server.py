@@ -87,8 +87,15 @@ class DwfMcpApp:
             ("waveforms.status", self._tool_status),
             ("waveforms.list_pins", self._tool_list_pins),
         ]:
-            self._tools[name] = handler
+            self._tools[name] = self._wrap_meta_handler(handler)
             self._tool_schemas[name] = meta_schema
+
+    @staticmethod
+    def _wrap_meta_handler(handler: Any) -> Any:
+        """Wrap a meta-tool handler so it silently ignores on_record_chunk."""
+        async def wrapper(on_record_chunk: Any = None, **kwargs: Any) -> Any:
+            return await handler(**kwargs)
+        return wrapper
 
     def register_instrument(self, cls: type[Instrument]) -> None:
         """Register an instrument class; the instance is created lazily on first tool call.
@@ -100,9 +107,14 @@ class DwfMcpApp:
             self._tool_schemas[tool_name] = schema
 
     def _make_instrument_handler(self, instrument_name: str, method_name: str) -> Any:
-        async def handler(**kwargs: Any) -> Any:
+        async def handler(
+            on_record_chunk: Any = None,
+            **kwargs: Any,
+        ) -> Any:
             instrument = self._get_or_create_instrument(instrument_name)
             method = getattr(instrument, method_name)
+            if method_name == "record_start" and on_record_chunk is not None:
+                kwargs["on_chunk"] = on_record_chunk
             result = method(**kwargs)
             if asyncio.iscoroutine(result):
                 return await result
@@ -115,14 +127,19 @@ class DwfMcpApp:
             self.instruments[name] = cls(device=self.device, artifacts=self.artifacts)
         return self.instruments[name]
 
-    async def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    async def call_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        on_record_chunk: Any = None,
+    ) -> dict[str, Any]:
         try:
             handler = self._tools[name]
         except KeyError:
             raise ValueError(f"unknown tool {name!r}") from None
         self.device.tick_idle()
         try:
-            result = await handler(**args)
+            result = await handler(on_record_chunk=on_record_chunk, **args)
             return cast(dict[str, Any], result)
         except tuple(_ERROR_TYPES.keys()) as exc:
             return {
@@ -227,6 +244,8 @@ def build_app(
 
 def main() -> None:
     """Stdio MCP transport entry point. Wires DwfMcpApp into the mcp SDK."""
+    import base64
+    import json as _json
     logging.basicConfig(level=logging.INFO)
     from mcp.server import Server  # imported lazily
     from mcp.server.stdio import stdio_server
@@ -249,7 +268,24 @@ def main() -> None:
 
     @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> Any:
-        return await app.call_tool(name, arguments)
+        mcp_session = server.request_context.session
+
+        async def on_chunk(record_id: str, chunk: Any) -> None:
+            import numpy as np
+            arr = np.asarray(chunk)
+            await mcp_session.send_log_message(
+                level="info",
+                data=_json.dumps({
+                    "event": "record_chunk",
+                    "record_id": record_id,
+                    "n_samples": int(arr.shape[0]),
+                    "dtype": str(arr.dtype),
+                    "shape": list(arr.shape),
+                    "data_b64": base64.b64encode(arr.tobytes()).decode(),
+                }),
+            )
+
+        return await app.call_tool(name, arguments, on_record_chunk=on_chunk)
 
     async def _run() -> None:
         async with stdio_server() as (reader, writer):
