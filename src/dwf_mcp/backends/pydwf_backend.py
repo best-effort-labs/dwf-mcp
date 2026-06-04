@@ -399,3 +399,57 @@ class PydwfBackend(DwfBackend):
         dio.status()  # refresh input state
         input_mask = int(dio.inputStatus())
         return bool(input_mask & (1 << pin_idx))
+
+    # --- Logic buffer-mode (DigitalIn) --------------------------------------
+
+    @property
+    def _digital_in(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.digitalIn
+
+    def logic_configure(
+        self, pin_mask: int, sample_rate_hz: float, buffer_size: int
+    ) -> None:
+        from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
+        din = self._digital_in
+        divider = max(1, round(100_000_000 / sample_rate_hz))
+        din.dividerSet(divider)
+        din.bufferSizeSet(buffer_size)
+        din.acquisitionModeSet(DwfAcquisitionMode.Single)
+
+    def logic_set_trigger(
+        self, source: str, pin_idx: int | None, level: float | None,
+        condition: str | None, position_s: float | None, timeout_s: float | None,
+    ) -> None:
+        from pydwf import DwfTriggerSource  # type: ignore[import-untyped]
+        din = self._digital_in
+        src_map = {
+            "none":                 DwfTriggerSource.None_,
+            "detector_digital_in":  DwfTriggerSource.DetectorDigitalIn,
+            "external1":            DwfTriggerSource.External1,
+            "external2":            DwfTriggerSource.External2,
+        }
+        din.triggerSourceSet(src_map[source])
+        if position_s is not None:
+            din.triggerPositionSet(position_s)
+        if timeout_s is not None:
+            din.triggerAutoTimeoutSet(timeout_s)
+
+    def logic_arm(self) -> None:
+        self._digital_in.configure(False, True)
+
+    def logic_status(self) -> str:
+        from pydwf import DwfState  # type: ignore[import-untyped]
+        st = self._digital_in.status(True)
+        if st == DwfState.Done:
+            return "Done"
+        return str(getattr(st, "name", st))
+
+    def logic_read(self, count: int) -> np.ndarray:
+        raw = self._digital_in.statusData2(count)
+        arr = np.array(raw, dtype=np.uint16)
+        result = np.zeros((len(arr), 16), dtype=np.uint8)
+        for bit in range(16):
+            result[:, bit] = (arr >> bit) & 1
+        return result
