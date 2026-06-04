@@ -17,9 +17,9 @@ Stage 3b delivers three parallel workstreams:
 | B — Streaming | `streaming.py` extraction, `scope.record`, MCP push notifications | `streaming.py` (new), edits to `logic.py`, `scope.py`, `server.py`, `backend.py` |
 | C — VCD | Runtime config toggle, streaming VCD assembly | `vcd_writer.py` |
 
-Workstream A is fully independent of B and C. Workstream C depends only on `scope.record` existing (Workstream B), but its changes to `vcd_writer.py` are self-contained and can land alongside B.
+Workstream A is fully independent of B and C. Workstream C is also independent of B for `vcd_writer.py` changes, but both B and C modify `logic.py` (`record_stop` in particular) — coordinate to avoid conflicts rather than strict sequencing.
 
-**Tool count after 3b:** ~47–49 tools (29 existing + 18–20 new).
+**Tool count after 3b:** ~43 tools (29 existing + 14 new: 1 DMM + 4 SPI + 3 UART + 3 CAN + 3 scope.record).
 
 **Out of scope:** Server-side image/plot generation (LLM generates visualization code from npz artifacts). Protocol sniffing (passive bus capture) deferred to Stage 4.
 
@@ -112,6 +112,8 @@ uart.read(length, timeout_s=1.0)     → {data: [...], data_hex: str, parity_err
 
 `parity`: `"none"`, `"odd"`, `"even"`. `data` is list of ints. At least one of `tx_pin` / `rx_pin` must be provided; configure raises `ValueError` if both are `None`.
 
+`uart.read` returns whatever bytes were received before the timeout — may be fewer than `length`. Callers must check `len(data)`. Empty `data` on timeout is not an error.
+
 #### Backend surface
 
 ```python
@@ -136,6 +138,8 @@ can.receive(timeout_s=1.0)           → {id, data, data_hex, extended, error_co
 ```
 
 `id`: 11-bit (standard, `extended=False`) or 29-bit (extended). `data`: list of 0–8 ints. `error_count` is the hardware error counter from pydwf's `rx()` return value.
+
+`can.receive` returns `{"id": None, "data": [], "data_hex": "", "extended": False, "error_count": 0}` on timeout — no exception raised. Callers check `id is None` to detect the timeout case.
 
 #### Backend surface
 
