@@ -482,3 +482,140 @@ class PydwfBackend(DwfBackend):
 
     def logic_record_stop(self) -> None:
         self._digital_in.configure(False, False)
+
+    # --- DMM (AnalogIn measurement) -------------------------------------------
+
+    def dmm_configure(
+        self, channel: int, range_v: float, coupling: str, n_averages: int
+    ) -> None:
+        ain = self._analog_in
+        ch_idx = channel - 1
+        ain.channelEnableSet(0, False)
+        ain.channelEnableSet(1, False)
+        ain.channelEnableSet(ch_idx, True)
+        ain.channelRangeSet(ch_idx, range_v)
+        ain.channelOffsetSet(ch_idx, 0.0)
+        cp = DwfAnalogCoupling.DC if coupling == "DC" else DwfAnalogCoupling.AC
+        ain.channelCouplingSet(ch_idx, cp)
+        ain.frequencySet(1000.0)
+        ain.bufferSizeSet(n_averages)
+        ain.acquisitionModeSet(DwfAcquisitionMode.Single)
+
+    def dmm_arm(self) -> None:
+        self._analog_in.configure(False, True)
+
+    def dmm_status(self) -> str:
+        st = self._analog_in.status(True)
+        return "Done" if st == DwfState.Done else str(getattr(st, "name", st))
+
+    def dmm_read(self, channel: int, count: int) -> np.ndarray:
+        return np.asarray(
+            self._analog_in.statusData(channel - 1, count), dtype=np.float64
+        )
+
+    def dmm_stop(self) -> None:
+        try:
+            self._analog_in.configure(False, False)
+        except Exception:
+            pass
+
+    # --- SPI (ProtocolSPI) ----------------------------------------------------
+
+    @property
+    def _spi(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.protocol.spi
+
+    def spi_configure(
+        self, clk_idx: int, freq_hz: float, mode: int,
+        mosi_idx: int | None, miso_idx: int | None, cs_idx: int | None,
+        cs_polarity: str, bit_order: str,
+    ) -> None:
+        spi = self._spi
+        spi.reset()
+        spi.frequencySet(freq_hz)
+        spi.modeSet(mode)
+        spi.orderMsbSet(bit_order == "msb")
+        spi.clockSet(clk_idx)
+        if mosi_idx is not None:
+            spi.dataSet(mosi_idx, 0)
+        if miso_idx is not None:
+            spi.dataSet(miso_idx, 1)
+        if cs_idx is not None:
+            polarity = 0 if cs_polarity == "active_low" else 1
+            spi.selectSet(cs_idx, polarity)
+
+    def spi_transfer(self, data: bytes, assert_cs: bool) -> bytes:
+        dcs = 1 if assert_cs else 0
+        rx = self._spi.writeRead(dcs, len(data) * 8, list(data))
+        return bytes(rx)
+
+    def spi_write(self, data: bytes, assert_cs: bool) -> None:
+        dcs = 1 if assert_cs else 0
+        self._spi.write(dcs, len(data) * 8, list(data))
+
+    def spi_read(self, length: int, assert_cs: bool) -> bytes:
+        dcs = 1 if assert_cs else 0
+        rx = self._spi.read(dcs, length * 8)
+        return bytes(rx)
+
+    # --- UART (ProtocolUART) --------------------------------------------------
+
+    @property
+    def _uart(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.protocol.uart
+
+    def uart_configure(
+        self, baud_rate: int, tx_idx: int | None, rx_idx: int | None,
+        data_bits: int, parity: str, stop_bits: int,
+    ) -> None:
+        uart = self._uart
+        uart.reset()
+        uart.baudrateSet(baud_rate)
+        uart.dataBitsSet(data_bits)
+        parity_map = {"none": 0, "odd": 1, "even": 2}
+        uart.paritySet(parity_map[parity])
+        uart.stopBitsSet(stop_bits)
+        if tx_idx is not None:
+            uart.txSet(tx_idx)
+        if rx_idx is not None:
+            uart.rxSet(rx_idx)
+        uart.enable()
+
+    def uart_write(self, data: bytes) -> None:
+        self._uart.tx(list(data))
+
+    def uart_read(self, length: int, timeout_s: float) -> tuple[bytes, bool]:
+        parity_err, rx_data = self._uart.rx(length)
+        return bytes(rx_data), bool(parity_err)
+
+    # --- CAN (ProtocolCAN) ----------------------------------------------------
+
+    @property
+    def _can(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.protocol.can
+
+    def can_configure(self, tx_idx: int, rx_idx: int, bit_rate: int) -> None:
+        can = self._can
+        can.reset()
+        can.rateSet(bit_rate)
+        can.txSet(tx_idx)
+        can.rxSet(rx_idx)
+
+    def can_send(self, id: int, data: bytes, extended: bool) -> None:
+        self._can.tx(id, int(extended), list(data))
+
+    def can_receive(self, timeout_s: float) -> tuple[int | None, bytes, bool, int]:
+        import time
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            status, frame_id, ext, data, error_count = self._can.rx()
+            if status:
+                return frame_id, bytes(data), bool(ext), error_count
+            time.sleep(0.001)
+        return None, b"", False, 0
