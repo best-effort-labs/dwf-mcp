@@ -20,7 +20,11 @@ from dwf_mcp.devices.ad3 import (
     AD3_TRIGGER_PINS,
 )
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
+from dwf_mcp.instruments.awg import AWG
+from dwf_mcp.instruments.dio import DIO
 from dwf_mcp.instruments.i2c import I2C
+from dwf_mcp.instruments.logic import Logic
+from dwf_mcp.instruments.pattern import Pattern
 from dwf_mcp.instruments.scope import Scope
 from dwf_mcp.instruments.supply import Supply
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
@@ -193,6 +197,10 @@ def build_app(
     app.register_instrument(Scope)
     app.register_instrument(Supply)
     app.register_instrument(I2C)
+    app.register_instrument(AWG)
+    app.register_instrument(Pattern)
+    app.register_instrument(DIO)
+    app.register_instrument(Logic)
     return app
 
 

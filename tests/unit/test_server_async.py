@@ -36,3 +36,18 @@ async def test_handler_awaits_coroutine(tmp_path):
     app.instruments["async_test"] = _AsyncInstrument(device=app.device, artifacts=app.artifacts)
     result = await app.call_tool("async_test.do_async", {})
     assert result == {"async": True}
+
+
+def test_build_app_registers_stage3a_tools(tmp_path):
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    tool_names = set(app._tools)
+    expected = {
+        "awg.configure", "awg.upload_custom", "awg.start", "awg.stop",
+        "pattern.configure", "pattern.start", "pattern.stop",
+        "dio.set_direction", "dio.set", "dio.read",
+        "logic.configure", "logic.set_trigger", "logic.capture",
+        "logic.record_start", "logic.record_status", "logic.record_stop",
+    }
+    missing = expected - tool_names
+    assert missing == set(), f"missing tools: {missing}"
