@@ -321,10 +321,10 @@ class FakeBackend(DwfBackend):
             "channel": channel, "range_v": range_v,
             "coupling": coupling, "n_averages": n_averages,
         }))
-        self._dmm_status_idx = 0
 
     def dmm_arm(self) -> None:
         self.dmm_calls.append(("arm", {}))
+        self._dmm_status_idx = 0
 
     def dmm_status(self) -> str:
         idx = min(self._dmm_status_idx, len(self._dmm_status_sequence) - 1)
