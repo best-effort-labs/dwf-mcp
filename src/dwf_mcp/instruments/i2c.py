@@ -1,14 +1,12 @@
 """I2C active-master instrument. Wraps pydwf.ProtocolI2C via the DwfBackend seam."""
 from __future__ import annotations
 
-import re
 from typing import Any, ClassVar
 
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
-
-_DIO_PATTERN = re.compile(r"^dio(\d+)$")
+from dwf_mcp.pin_utils import dio_index as _dio_index
 
 I2C_CONFIGURE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -52,13 +50,6 @@ I2C_WRITE_READ_SCHEMA: dict[str, Any] = {
 }
 
 I2C_SCAN_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
-
-
-def _dio_index(pin: str) -> int:
-    m = _DIO_PATTERN.match(pin)
-    if not m:
-        raise ValueError(f"expected pin like 'dio0'..'dio15', got {pin!r}")
-    return int(m.group(1))
 
 
 def _to_bytes(data: list[int] | bytes) -> bytes:

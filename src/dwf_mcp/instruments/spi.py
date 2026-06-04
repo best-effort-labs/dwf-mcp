@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-import re
 from typing import Any, ClassVar
 
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
-
-_DIO_PATTERN = re.compile(r"^dio(\d+)$")
-
-
-def _dio_index(pin: str) -> int:
-    m = _DIO_PATTERN.match(pin)
-    if not m:
-        raise ValueError(f"expected pin like 'dio0'..'dio15', got {pin!r}")
-    return int(m.group(1))
+from dwf_mcp.pin_utils import dio_index as _dio_index
 
 
 SPI_CONFIGURE_SCHEMA: dict[str, Any] = {
