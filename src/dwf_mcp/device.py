@@ -40,6 +40,7 @@ class DwfDevice:
         self.allocator = allocator
         self.workspace = workspace  # property setter sets _workspace and _workspace_raw
         self.idle_timeout_s = idle_timeout_s
+        self.vcd_enabled: bool = True
         self._info: DeviceInfo | None = None
         self._last_activity: float | None = None
         self._serial_request: str | None = None

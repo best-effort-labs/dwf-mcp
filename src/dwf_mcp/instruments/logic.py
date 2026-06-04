@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
-import time
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, ClassVar
@@ -16,6 +15,7 @@ from dwf_mcp import vcd_writer
 from dwf_mcp.artifacts import ArtifactWriter, CaptureSummary
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
+from dwf_mcp.streaming import RecordingSession, notification_loop, process_chunk, record_loop
 
 log = logging.getLogger(__name__)
 
@@ -94,21 +94,6 @@ LOGIC_RECORD_ID_SCHEMA: dict[str, Any] = {
 }
 
 
-@dataclasses.dataclass
-class _RecordingSession:
-    record_id: str
-    task: asyncio.Task[Any] | None
-    queue: asyncio.Queue[Any]  # streaming seam for future MCP notifications
-    chunks: list[np.ndarray]
-    pins: list[str]
-    sample_rate_hz: float
-    output_path: str | None
-    format: str
-    lost_samples: int
-    done: bool
-    error: str | None
-
-
 class Logic(Instrument):
     name = "logic"
     tools: ClassVar[dict[str, tuple[str, dict[str, Any]]]] = {
@@ -124,7 +109,7 @@ class Logic(Instrument):
         self.device = device
         self.artifacts = artifacts
         self._config: dict[str, Any] | None = None
-        self._sessions: dict[str, _RecordingSession] = {}
+        self._sessions: dict[str, RecordingSession] = {}
 
     # --- Buffer-mode ---
 
@@ -183,15 +168,15 @@ class Logic(Instrument):
             raise InstrumentNotConfigured("logic.configure must be called before capture")
         if format not in _VALID_FORMATS:
             raise ValueError(f"format must be one of {sorted(_VALID_FORMATS)}, got {format!r}")
-        if format == "vcd" and not vcd_writer.HAS_VCD:
-            raise ImportError(
-                "VCD format requires the 'pyvcd' package: pip install dwf-mcp[vcd]"
+        if format == "vcd" and not self.device.vcd_enabled:
+            raise ValueError(
+                "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
             )
         cfg = self._config
         self.device.backend.logic_arm()
-        deadline = time.monotonic() + max(
-            cfg["buffer_size"] / cfg["sample_rate_hz"] * 10 + 1.0, 2.0
-        )
+        deadline_s = max(cfg["buffer_size"] / cfg["sample_rate_hz"] * 10 + 1.0, 2.0)
+        import time
+        deadline = time.monotonic() + deadline_s
         while time.monotonic() < deadline:
             if self.device.backend.logic_status() == "Done":
                 break
@@ -238,7 +223,12 @@ class Logic(Instrument):
             summary=summary,
             output_path=Path(output_path) if output_path else None,
         )
-        return {"path": result.path, "sidecar_path": result.sidecar_path, "format": "npz", "n_samples": samples.shape[0]}
+        return {
+            "path": result.path,
+            "sidecar_path": result.sidecar_path,
+            "format": "npz",
+            "n_samples": samples.shape[0],
+        }
 
     # --- Streaming (record) ---
 
@@ -249,12 +239,13 @@ class Logic(Instrument):
         duration_s: float,
         output_path: str | None = None,
         format: str = "npz",
+        on_chunk: Callable[[str, np.ndarray], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         if format not in _VALID_FORMATS:
             raise ValueError(f"format must be one of {sorted(_VALID_FORMATS)}, got {format!r}")
-        if format == "vcd" and not vcd_writer.HAS_VCD:
-            raise ImportError(
-                "VCD format requires the 'pyvcd' package: pip install dwf-mcp[vcd]"
+        if format == "vcd" and not self.device.vcd_enabled:
+            raise ValueError(
+                "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
             )
         self.device.allocator.claim("logic", pins)
         try:
@@ -267,42 +258,53 @@ class Logic(Instrument):
         except Exception:
             self.device.allocator.release("logic")
             raise
+
         record_id = str(uuid.uuid4())
-        queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
-        session = _RecordingSession(
+        queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=32)
+        session = RecordingSession(
             record_id=record_id,
             task=None,
+            notification_task=None,
             queue=queue,
             chunks=[],
-            pins=list(pins),
-            sample_rate_hz=sample_rate_hz,
-            output_path=output_path,
-            format=format,
             lost_samples=0,
             done=False,
             error=None,
+            on_chunk=on_chunk,
+            on_chunk_sync=None,  # VCD wired in Task 6
+            meta={
+                "pins": list(pins),
+                "sample_rate_hz": sample_rate_hz,
+                "output_path": output_path,
+                "format": format,
+                "vcd_writer": None,
+                "vcd_path": None,
+            },
         )
-        session.task = asyncio.create_task(self._record_loop(session))
+        try:
+            session.task = asyncio.create_task(
+                record_loop(
+                    session,
+                    self.device.backend.logic_record_status,
+                    self.device.backend.logic_record_read,
+                )
+            )
+            if on_chunk is not None:
+                session.notification_task = asyncio.create_task(
+                    notification_loop(session, on_chunk)
+                )
+        except Exception:
+            if session.task is not None:
+                session.task.cancel()
+            try:
+                self.device.backend.logic_record_stop()
+            except Exception:
+                pass
+            self.device.allocator.release("logic")
+            raise
+
         self._sessions[record_id] = session
         return {"record_id": record_id}
-
-    async def _record_loop(self, session: _RecordingSession) -> None:
-        try:
-            while not session.done:
-                await asyncio.sleep(0.010)
-                available, lost, remaining = self.device.backend.logic_record_status()
-                session.lost_samples += lost
-                if available > 0:
-                    chunk = self.device.backend.logic_record_read(available)
-                    session.chunks.append(chunk)
-                    await session.queue.put(chunk)
-                if remaining == 0:
-                    session.done = True
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            session.error = str(exc)
-            session.done = True
 
     def record_status(self, record_id: str) -> dict[str, Any]:
         session = self._sessions.get(record_id)
@@ -320,48 +322,65 @@ class Logic(Instrument):
         session = self._sessions.get(record_id)
         if session is None:
             raise ValueError(f"unknown record_id {record_id!r}")
-        # 1. Cancel the background task.
-        if session.task is not None:
-            session.task.cancel()
-            with suppress(asyncio.CancelledError):
-                await session.task
-        # 2. Stop hardware acquisition.
         try:
-            self.device.backend.logic_record_stop()
-        except Exception as exc:
-            log.warning("logic_record_stop failed: %s", exc)
-        # 3. Drain any remaining available samples.
-        try:
-            available, lost, _ = self.device.backend.logic_record_status()
-            session.lost_samples += lost
-            if available > 0:
-                chunk = self.device.backend.logic_record_read(available)
-                session.chunks.append(chunk)
-        except Exception as exc:
-            log.warning("drain after record_stop failed: %s", exc)
-        # 4. Write artifact (best-effort).
-        artifact_path: str | None = None
-        artifact_error: str | None = None
-        if session.chunks:
+            # 1. Cancel background tasks.
+            if session.task is not None:
+                session.task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await session.task
+            if session.notification_task is not None:
+                session.notification_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await session.notification_task
+            # 2. Stop hardware acquisition.
             try:
-                all_raw = np.concatenate(session.chunks, axis=0)
-                pin_indices = _pin_indices(session.pins)
-                samples = all_raw[:, pin_indices].astype(np.uint8)
-                result_dict = self._write_artifact(
-                    samples=samples,
-                    pin_names=session.pins,
-                    sample_rate_hz=session.sample_rate_hz,
-                    output_path=session.output_path,
-                    format=session.format,
-                )
-                artifact_path = result_dict.get("path")
+                self.device.backend.logic_record_stop()
             except Exception as exc:
-                log.exception("artifact write failed for record_id=%r", record_id)
-                artifact_error = str(exc)
-        # 5. Remove session.
-        del self._sessions[record_id]
-        # 6. Release pin claim.
-        self.device.allocator.release("logic")
+                log.warning("logic_record_stop failed: %s", exc)
+            # 3. Drain any remaining available samples.
+            try:
+                available, lost, _ = self.device.backend.logic_record_status()
+                session.lost_samples += lost
+                if available > 0:
+                    chunk = self.device.backend.logic_record_read(available)
+                    try:
+                        process_chunk(session, chunk)
+                    except Exception as exc:
+                        log.warning("drain process_chunk failed: %s", exc)
+            except Exception as exc:
+                log.warning("drain after logic_record_stop failed: %s", exc)
+            # 4. Write artifact (best-effort).
+            artifact_path: str | None = None
+            artifact_error: str | None = None
+            fmt = session.meta.get("format", "npz")
+            if fmt == "vcd":
+                artifact_path = session.meta.get("vcd_path")
+            elif session.chunks:
+                try:
+                    pins = session.meta["pins"]
+                    pin_indices = _pin_indices(pins)
+                    all_raw = np.concatenate(session.chunks, axis=0)
+                    samples = all_raw[:, pin_indices].astype(np.uint8)
+                    result_dict = self._write_artifact(
+                        samples=samples,
+                        pin_names=pins,
+                        sample_rate_hz=session.meta["sample_rate_hz"],
+                        output_path=session.meta.get("output_path"),
+                        format="npz",
+                    )
+                    artifact_path = result_dict.get("path")
+                except Exception as exc:
+                    log.exception("artifact write failed for record_id=%r", record_id)
+                    artifact_error = str(exc)
+        finally:
+            # Close VCD writer if present (Task 6 sets this).
+            vcd_w = session.meta.get("vcd_writer")
+            if vcd_w is not None:
+                with suppress(Exception):
+                    vcd_w.close()
+            del self._sessions[record_id]
+            self.device.allocator.release("logic")
+
         return {
             "record_id": record_id,
             "artifact_path": artifact_path,
@@ -374,6 +393,8 @@ class Logic(Instrument):
         for session in list(self._sessions.values()):
             if session.task is not None:
                 session.task.cancel()
+            if session.notification_task is not None:
+                session.notification_task.cancel()
         self._sessions.clear()
         self.device.allocator.release("logic")
         self._config = None
