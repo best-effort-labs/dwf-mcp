@@ -185,6 +185,7 @@ def build_app(
     backend_name: str | None = None,
     workspace: str | None = None,
     idle_timeout_s: float = 600.0,
+    enable_vcd: bool | None = None,
 ) -> DwfMcpApp:
     backend_name = backend_name or os.environ.get("DWF_BACKEND", "pydwf")
     backend = _build_backend(backend_name)
@@ -196,6 +197,18 @@ def build_app(
         workspace=workspace or "",
         idle_timeout_s=idle_timeout_s,
     )
+    if enable_vcd is True:
+        from dwf_mcp import vcd_writer as _vw
+        if not _vw.HAS_VCD:
+            raise ImportError(
+                "enable_vcd=True but pyvcd is not installed: pip install dwf-mcp[vcd]"
+            )
+        device.vcd_enabled = True
+    elif enable_vcd is False:
+        device.vcd_enabled = False
+    else:
+        from dwf_mcp import vcd_writer as _vw
+        device.vcd_enabled = _vw.HAS_VCD
     registry = InstrumentRegistry()
     app = DwfMcpApp(device, registry)
     app.register_instrument(Scope)
@@ -218,7 +231,13 @@ def main() -> None:
     from mcp.server import Server  # imported lazily
     from mcp.server.stdio import stdio_server
 
-    app = build_app()
+    _vcd_env = os.environ.get("DWF_ENABLE_VCD")
+    _enable_vcd: bool | None = None
+    if _vcd_env == "1":
+        _enable_vcd = True
+    elif _vcd_env == "0":
+        _enable_vcd = False
+    app = build_app(enable_vcd=_enable_vcd)
     server: Server = Server("dwf-mcp")
 
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
