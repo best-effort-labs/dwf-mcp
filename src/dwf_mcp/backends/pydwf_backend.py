@@ -273,3 +273,56 @@ class PydwfBackend(DwfBackend):
 
     def i2c_write_one(self, address: int, byte: int) -> int:
         return int(self._i2c.writeOne(address << 1, byte))
+
+    # --- AWG (AnalogOut) ----------------------------------------------------
+
+    @property
+    def _analog_out(self) -> Any:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        return self._device.analogOut
+
+    def awg_configure(
+        self, channel: int, function: str, freq_hz: float,
+        amplitude_v: float, offset_v: float, phase_deg: float,
+        symmetry: float, run_time_s: float | None,
+    ) -> None:
+        from pydwf import DwfAnalogOutFunction, DwfAnalogOutNode  # type: ignore[import-untyped]
+        ch_idx = channel - 1
+        ao = self._analog_out
+        node = DwfAnalogOutNode.Carrier
+        func_map = {
+            "Sine":     DwfAnalogOutFunction.Sine,
+            "Square":   DwfAnalogOutFunction.Square,
+            "Triangle": DwfAnalogOutFunction.Triangle,
+            "RampUp":   DwfAnalogOutFunction.RampUp,
+            "RampDown": DwfAnalogOutFunction.RampDown,
+            "DC":       DwfAnalogOutFunction.DC,
+            "Noise":    DwfAnalogOutFunction.Noise,
+            "Custom":   DwfAnalogOutFunction.Custom,
+        }
+        ao.nodeEnableSet(ch_idx, node, True)
+        ao.nodeFunctionSet(ch_idx, node, func_map[function])
+        ao.nodeFrequencySet(ch_idx, node, freq_hz)
+        ao.nodeAmplitudeSet(ch_idx, node, amplitude_v)
+        ao.nodeOffsetSet(ch_idx, node, offset_v)
+        ao.nodePhaseSet(ch_idx, node, phase_deg)
+        ao.nodeSymmetrySet(ch_idx, node, symmetry)
+        ao.runSet(ch_idx, run_time_s if run_time_s is not None else 0.0)
+        # Apply params to hardware without starting output.
+        ao.configure(ch_idx, False)
+
+    def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
+        from pydwf import DwfAnalogOutNode  # type: ignore[import-untyped]
+        ch_idx = channel - 1
+        ao = self._analog_out
+        node = DwfAnalogOutNode.Carrier
+        ao.nodeEnableSet(ch_idx, node, True)
+        ao.nodeDataSet(ch_idx, node, samples.tolist())
+        ao.configure(ch_idx, False)
+
+    def awg_start(self, channel: int) -> None:
+        self._analog_out.configure(channel - 1, True)
+
+    def awg_stop(self, channel: int) -> None:
+        self._analog_out.configure(channel - 1, False)
