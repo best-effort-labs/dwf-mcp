@@ -40,7 +40,9 @@ def test_pattern_clock_captured_by_logic(tmp_path: Path) -> None:
         logic = Logic(device=device, artifacts=arts)
 
         # Drive DIO0 at 10 kHz clock, capture DIO1 at 1 MHz.
-        pat.configure(pin="dio0", function="Clock", frequency_hz=10_000.0, duty=0.5, idle_state="low")
+        pat.configure(
+            pin="dio0", function="Clock", frequency_hz=10_000.0, duty=0.5, idle_state="low"
+        )
         pat.start(pin="dio0")
 
         logic.configure(pins=["dio1"], sample_rate_hz=1_000_000, buffer_size=4096)
