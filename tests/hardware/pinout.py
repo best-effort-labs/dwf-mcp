@@ -5,7 +5,7 @@ import os
 N_PER_SIDE = 15
 
 AD3_TOP_ROW = int(os.environ.get("AD3_TOP_ROW", "1"))
-AD3_BOT_ROW = int(os.environ.get("AD3_BOT_ROW", "16"))
+AD3_BOT_ROW = int(os.environ.get("AD3_BOT_ROW", "31"))
 # AD3_REVERSED=0 (default): AD3 in natural orientation — connector faces outward, label
 #   readable, pins appear in presented order (1+, 2+, GND, V+, W1 … DIO7).
 # AD3_REVERSED=1: AD3 faces INTO the breadboard (component side down) — pin order reversed.
