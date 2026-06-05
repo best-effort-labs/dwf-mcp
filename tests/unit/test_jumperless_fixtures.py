@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import importlib
 import inspect
 import os
@@ -138,3 +139,76 @@ def test_jumperless_open_exception_yields_none_with_warning():
     ):
         val, _ = _run_jumperless(cfg)
     assert val is None
+
+
+# ---------------------------------------------------------------------------
+# wire autouse fixture tests (tests 7-10 from spec)
+# ---------------------------------------------------------------------------
+
+def _make_marker(connections: dict) -> MagicMock:
+    m = MagicMock()
+    m.kwargs = {"connections": connections}
+    return m
+
+
+def _run_wire(request, jl, cfg):
+    from tests.hardware import conftest as hw
+    gen_func = inspect.unwrap(hw.wire)
+    return gen_func(request, jl, cfg)
+
+
+def test_wire_no_marker_skips_completely():
+    request = MagicMock()
+    request.node.get_closest_marker.return_value = None
+    mock_jl = MagicMock()
+    cfg = _make_config()
+    gen = _run_wire(request, mock_jl, cfg)
+    list(gen)
+    mock_jl.connect.assert_not_called()
+    mock_jl.nodes_clear.assert_not_called()
+
+
+def test_wire_with_jumperless_connects_and_clears():
+    from tests.hardware.pinout import row
+    request = MagicMock()
+    request.node.get_closest_marker.return_value = _make_marker(
+        {"loopback": ("DIO0", "DIO1")}
+    )
+    mock_jl = MagicMock()
+    cfg = _make_config()
+    gen = _run_wire(request, mock_jl, cfg)
+    next(gen)  # run up to yield (test body)
+    assert mock_jl.nodes_clear.call_count == 1
+    mock_jl.connect.assert_called_once_with(row("DIO0"), row("DIO1"))
+    with contextlib.suppress(StopIteration):
+        next(gen)  # trigger cleanup
+    assert mock_jl.nodes_clear.call_count == 2
+
+
+def test_wire_clears_on_test_failure():
+    request = MagicMock()
+    request.node.get_closest_marker.return_value = _make_marker(
+        {"loopback": ("DIO0", "DIO1")}
+    )
+    mock_jl = MagicMock()
+    cfg = _make_config()
+    gen = _run_wire(request, mock_jl, cfg)
+    next(gen)
+    with contextlib.suppress(RuntimeError, StopIteration):
+        gen.throw(RuntimeError("test failed"))
+    # finally block must still clear
+    assert mock_jl.nodes_clear.call_count == 2
+
+
+def test_wire_skip_prompts_no_input_called():
+    request = MagicMock()
+    request.node.get_closest_marker.return_value = _make_marker(
+        {"loopback": ("DIO0", "DIO1")}
+    )
+    cfg = _make_config(skip_wiring=True)
+    with patch("builtins.input") as mock_input:
+        gen = _run_wire(request, None, cfg)  # jumperless=None
+        next(gen)
+        with contextlib.suppress(StopIteration):
+            next(gen)
+    mock_input.assert_not_called()
