@@ -22,11 +22,15 @@ relative to the pinout diagram, pin offsets within each side are reversed.
 
 ## Detection hierarchy
 
-1. `jumperless-py` not installed → manual prompts
-2. Installed, fewer than 3 serial ports found → manual prompts
-3. Installed, device found, `--jumperless-manual` CLI flag set → manual prompts
-4. Installed, device found, no override → auto-wire
-5. `--skip-wiring-prompts` → skip all prompts (CI / pre-wired bench)
+Checked in this order — earlier conditions short-circuit the rest:
+
+1. `--skip-wiring-prompts` CLI flag set → skip all prompts, no device import or probe (CI / pre-wired bench)
+2. `jumperless-py` not installed → manual prompts
+3. Installed, but `find_jumperless_ports()` returns fewer than 3 ports → manual prompts
+   _(The Jumperless V5 exposes exactly 3 USB serial ports: main terminal, Arduino passthrough,
+   and MicroPython Raw REPL. Fewer than 3 means the device is absent or not fully enumerated.)_
+4. Installed, device found, `--jumperless-manual` CLI flag set → manual prompts
+5. Installed, device found, no override → auto-wire
 
 `jumperless-py` is an optional dependency. It is never imported at module level in the
 production `dwf_mcp` package — only inside the test fixtures.
@@ -122,6 +126,15 @@ def pytest_configure(config):
         "markers",
         "jumperless(connections): dict of label -> (signal1, signal2) connections required",
     )
+
+def pytest_runtest_setup(item):
+    """Warn at collection time if jumperless marker is present but wire fixture is missing."""
+    if item.get_closest_marker("jumperless") and "wire" not in item.fixturenames:
+        warnings.warn(
+            f"{item.nodeid}: has @pytest.mark.jumperless but does not request the 'wire' fixture "
+            "— connections will not be made",
+            stacklevel=2,
+        )
 ```
 
 ---
@@ -132,10 +145,14 @@ def pytest_configure(config):
 
 Opens the device once at session start, closes at session end. Returns `None` when
 auto-wiring is unavailable (the `wire` fixture handles the fallback).
+`--skip-wiring-prompts` is checked first so CI never imports or probes the serial bus.
 
 ```python
 @pytest.fixture(scope="session")
 def jumperless(pytestconfig):
+    if pytestconfig.getoption("--skip-wiring-prompts"):
+        yield None
+        return
     try:
         from jumperless import Jumperless, find_jumperless_ports
     except ImportError:
@@ -146,11 +163,17 @@ def jumperless(pytestconfig):
         yield None
         return
     j = Jumperless()
-    yield j
-    j.close()
+    try:
+        yield j
+    finally:
+        j.close()
 ```
 
 ### `app` fixture (session-scoped)
+
+`waveforms.open` initializes the device but does not configure any channels or require
+specific wiring to be in place. Wiring is set up by `wire` (function-scoped) before the
+test body runs — the session/function scope difference is safe here.
 
 ```python
 @pytest.fixture(scope="session")
@@ -163,9 +186,14 @@ def app():
 
 ### `wire` fixture (function-scoped)
 
-Reads the `jumperless` marker from the test node. If the device is available, connects
-all listed signal pairs before the test and calls `nodes_clear()` after. If unavailable
-and prompts are not suppressed, prints interactive prompts.
+Reads the `jumperless` marker from the test node. If the device is available, clears the
+board, connects all listed signal pairs, and clears again in `finally` (so cleanup runs
+even if the test errors). If unavailable and prompts are not suppressed, prints interactive
+prompts — teardown prompt also runs in `finally`.
+
+`nodes_clear()` is safe here because the invariant is: **all non-test Jumperless state is
+physical only** (components on breadboard rows, rails via header pins). There is no
+persistent programmatic routing outside of what `wire` itself adds.
 
 ```python
 @pytest.fixture
@@ -179,17 +207,22 @@ def wire(request, jumperless, pytestconfig):
     skip = pytestconfig.getoption("--skip-wiring-prompts")
 
     if jumperless is not None:
+        jumperless.nodes_clear()   # start clean
         for n1, n2 in connections.values():
             jumperless.connect(pinout.row(n1), pinout.row(n2))
-        yield
-        jumperless.nodes_clear()
+        try:
+            yield
+        finally:
+            jumperless.nodes_clear()
     elif skip:
         yield
     else:
         for label, (n1, n2) in connections.items():
             input(f"  [{label}]  connect {n1} → {n2}, then press Enter ... ")
-        yield
-        input("  Test done — remove connections, press Enter ... ")
+        try:
+            yield
+        finally:
+            input("  Test done — remove connections, press Enter ... ")
 ```
 
 ---
