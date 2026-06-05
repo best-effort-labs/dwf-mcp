@@ -9,6 +9,12 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.jumperless(connections={
+    "sda_pwr": ("TOP_RAIL", "I2C_SDA_R_A"),
+    "sda_sig": ("DIO0", "I2C_SDA_R_B"),
+    "scl_pwr": ("TOP_RAIL", "I2C_SCL_R_A"),
+    "scl_sig": ("DIO1", "I2C_SCL_R_B"),
+})
 def test_i2c_scan_runs_without_error(tmp_path) -> None:
     pytest.importorskip("pydwf")
     from dwf_mcp.allocator import PinAllocator

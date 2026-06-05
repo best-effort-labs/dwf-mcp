@@ -36,6 +36,7 @@ def open_device(app):
 
 
 @pytest.mark.asyncio
+@pytest.mark.jumperless(connections={"ch1": ("W1", "CH1_POS")})
 async def test_scope_record_dc_signal(app, tmp_path: Path) -> None:
     """Record a DC signal from W1 and verify mean voltage is approximately correct."""
     # Set W1 to DC at 2.0V
@@ -81,6 +82,7 @@ async def test_scope_record_dc_signal(app, tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.jumperless(connections={"ch1": ("W1", "CH1_POS"), "ch2": ("W2", "CH2_POS")})
 async def test_scope_record_two_channels(app, tmp_path: Path) -> None:
     """Record both channels simultaneously."""
     # W1 = 1.5V DC, W2 = -1.0V DC (if wired)

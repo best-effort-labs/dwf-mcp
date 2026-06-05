@@ -12,6 +12,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.jumperless(connections={"loopback": ("DIO0", "DIO1")})
 def test_pattern_clock_captured_by_logic(tmp_path: Path) -> None:
     pytest.importorskip("pydwf")
 

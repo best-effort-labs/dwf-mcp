@@ -11,6 +11,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.jumperless(connections={"loopback": ("DIO0", "DIO1")})
 def test_dio_loopback_high_low(tmp_path: Path) -> None:
     pytest.importorskip("pydwf")
 
