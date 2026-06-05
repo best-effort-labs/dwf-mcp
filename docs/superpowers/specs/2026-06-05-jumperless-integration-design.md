@@ -42,7 +42,7 @@ production `dwf_mcp` package — only inside the test fixtures.
 | Path | Purpose |
 |------|---------|
 | `tests/hardware/pinout.py` | AD3 signal name → Jumperless row number |
-| `tests/hardware/conftest.py` | `jumperless` session fixture, `wire` function fixture, `app` session fixture |
+| `tests/hardware/conftest.py` | `jumperless` session fixture, `wire` autouse fixture, `app` function fixture |
 
 ## Modified files
 
@@ -167,34 +167,23 @@ def jumperless(pytestconfig):
         j.close()
 ```
 
-### `app` fixture (session-scoped)
+### `app` fixture (function-scoped)
 
-`waveforms.open` initializes the device but does not configure any channels or require
-specific wiring to be in place. Wiring is set up by `wire` (autouse, function-scoped)
-before the test body runs — the session/function scope difference is safe here.
+Used only by the four server-style tests (`dmm`, `uart`, `spi`, `can`) that talk to the
+device through the MCP `build_app` interface. Function-scoped so each test gets a fresh
+device open/close — this prevents cross-test state leakage and avoids conflicting with
+the low-level tests (eight remaining tests) which open their own `PydwfBackend` directly.
+A session-scoped shared app would cause a double-open conflict with those tests.
 
 ```python
-@pytest.fixture(scope="session")
+@pytest.fixture
 def app():
     a = build_app(backend_name="pydwf")
     asyncio.run(a.call_tool("waveforms.open", {}))
-    yield a
-    asyncio.run(a.call_tool("waveforms.close", {}))
-```
-
-### `reset_device` fixture (autouse, function-scoped)
-
-Resets device state before every hardware test by closing and reopening the AD3. This
-clears all instrument allocations, active outputs, and hardware configuration left by the
-previous test, ensuring a clean slate regardless of what the previous test did or how it
-ended.
-
-```python
-@pytest.fixture(autouse=True)
-def reset_device(app):
-    asyncio.run(app.call_tool("waveforms.close", {}))
-    asyncio.run(app.call_tool("waveforms.open", {}))
-    yield
+    try:
+        yield a
+    finally:
+        asyncio.run(a.call_tool("waveforms.close", {}))
 ```
 
 ### `wire` fixture (autouse, function-scoped)
@@ -245,36 +234,66 @@ def wire(request, jumperless, pytestconfig):
 ## Retrofit pattern
 
 Adding Jumperless support to an existing test requires one line — add the marker.
-No signature change needed: `wire` and `reset_device` are autouse.
+No signature change needed: `wire` is autouse.
 
 ```python
 # before
 @pytest.mark.hardware
-def test_spi_loopback(app) -> None:
+def test_dio_loopback_high_low(tmp_path: Path) -> None:
 
 # after
 @pytest.mark.hardware
-@pytest.mark.jumperless(connections={"loopback": ("DIO1", "DIO2")})
-def test_spi_loopback(app) -> None:
+@pytest.mark.jumperless(connections={"loopback": ("DIO0", "DIO1")})
+def test_dio_loopback_high_low(tmp_path: Path) -> None:
 ```
 
 Test body is unchanged. Tests without the marker are unaffected — `wire` short-circuits
 when no marker is present.
 
+The four server-style tests (`dmm`, `uart`, `spi`, `can`) currently call `build_app`
+internally. As part of the retrofit, replace those inline `build_app` + `waveforms.open`
+calls with the `app` fixture so teardown is guaranteed even on failure:
+
+```python
+# before (dmm / uart / spi / can pattern)
+@pytest.mark.hardware
+def test_uart_loopback() -> None:
+    app = build_app(backend_name="pydwf")
+    async def run() -> None:
+        await app.call_tool("waveforms.open", {})
+        ...
+        await app.call_tool("waveforms.close", {})
+    asyncio.run(run())
+
+# after
+@pytest.mark.hardware
+@pytest.mark.jumperless(connections={"loopback": ("DIO0", "DIO1")})
+def test_uart_loopback(app) -> None:
+    async def run() -> None:
+        ...  # body unchanged, waveforms.open/close removed
+    asyncio.run(run())
+```
+
 ---
 
 ## Connection conventions per instrument
 
-| Test | Connections |
-|------|------------|
-| SPI loopback | `("DIO1", "DIO2")` — MOSI → MISO |
-| UART loopback | `("DIO0", "DIO1")` — TX → RX |
-| I2C | `("TOP_RAIL", "I2C_SDA_R_A")`, `("DIO4", "I2C_SDA_R_B")`, `("TOP_RAIL", "I2C_SCL_R_A")`, `("DIO5", "I2C_SCL_R_B")` |
-| Scope / AWG | `("W1", "CH1_POS")` and/or `("W2", "CH2_POS")` |
-| Logic / Pattern | `("DIO0", "DIO4")` etc. per test |
-| DMM | `("W1", "CH1_POS")` for voltage; `("DAC0", "CH1_POS")` for current path |
+Derived from the wiring comments at the top of each existing test file:
 
-Exact DIO indices per instrument match the `configure` call in the test.
+| Test file | Connections |
+|-----------|------------|
+| `test_spi_hardware.py` | `{"loopback": ("DIO1", "DIO2")}` — MOSI(DIO1) → MISO(DIO2) |
+| `test_uart_hardware.py` | `{"loopback": ("DIO0", "DIO1")}` — TX → RX |
+| `test_can_hardware.py` | `{"loopback": ("DIO0", "DIO1")}` — TX → RX |
+| `test_i2c_hardware.py` | `{"sda_pwr": ("TOP_RAIL","I2C_SDA_R_A"), "sda_sig": ("DIO0","I2C_SDA_R_B"), "scl_pwr": ("TOP_RAIL","I2C_SCL_R_A"), "scl_sig": ("DIO1","I2C_SCL_R_B")}` |
+| `test_awg_hardware.py` | `{"awg_to_scope": ("W1", "CH1_POS")}` |
+| `test_scope_hardware.py` | `{"awg_to_scope": ("W1", "CH1_POS")}` |
+| `test_scope_record_hardware.py` | `{"ch1": ("W1", "CH1_POS"), "ch2": ("W2", "CH2_POS")}` |
+| `test_dmm_hardware.py` | `{"awg_to_scope": ("W1", "CH1_POS")}` |
+| `test_logic_hardware.py` | `{"loopback": ("DIO0", "DIO1")}` — pattern → logic |
+| `test_dio_hardware.py` | `{"loopback": ("DIO0", "DIO1")}` — out → in |
+| `test_supply_hardware.py` | _(no wiring required — tests V+ rail directly)_ |
+| `test_pydwf_backend.py` | _(no wiring required — enumerate/open only)_ |
 
 ---
 
