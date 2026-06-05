@@ -49,7 +49,7 @@ production `dwf_mcp` package — only inside the test fixtures.
 | Path | Change |
 |------|--------|
 | `tests/conftest.py` | Add CLI options and marker registration |
-| `tests/hardware/test_*.py` (all 12) | Add `@pytest.mark.jumperless` marker + `wire` fixture |
+| `tests/hardware/test_*.py` (all 12) | Add `@pytest.mark.jumperless` marker only — no signature change |
 
 ---
 
@@ -126,15 +126,6 @@ def pytest_configure(config):
         "markers",
         "jumperless(connections): dict of label -> (signal1, signal2) connections required",
     )
-
-def pytest_runtest_setup(item):
-    """Warn at collection time if jumperless marker is present but wire fixture is missing."""
-    if item.get_closest_marker("jumperless") and "wire" not in item.fixturenames:
-        warnings.warn(
-            f"{item.nodeid}: has @pytest.mark.jumperless but does not request the 'wire' fixture "
-            "— connections will not be made",
-            stacklevel=2,
-        )
 ```
 
 ---
@@ -146,6 +137,8 @@ def pytest_runtest_setup(item):
 Opens the device once at session start, closes at session end. Returns `None` when
 auto-wiring is unavailable (the `wire` fixture handles the fallback).
 `--skip-wiring-prompts` is checked first so CI never imports or probes the serial bus.
+Probe and open failures (permission errors, stale ports, busy Raw REPL) are caught and
+treated as "no device" with a warning rather than failing fixture setup.
 
 ```python
 @pytest.fixture(scope="session")
@@ -158,11 +151,16 @@ def jumperless(pytestconfig):
     except ImportError:
         yield None
         return
-    if (len(find_jumperless_ports()) < 3
-            or pytestconfig.getoption("--jumperless-manual")):
+    try:
+        ports = find_jumperless_ports()
+        if len(ports) < 3 or pytestconfig.getoption("--jumperless-manual"):
+            yield None
+            return
+        j = Jumperless()
+    except Exception as exc:
+        warnings.warn(f"Jumperless probe/open failed ({exc!r}), falling back to manual prompts")
         yield None
         return
-    j = Jumperless()
     try:
         yield j
     finally:
@@ -172,8 +170,8 @@ def jumperless(pytestconfig):
 ### `app` fixture (session-scoped)
 
 `waveforms.open` initializes the device but does not configure any channels or require
-specific wiring to be in place. Wiring is set up by `wire` (function-scoped) before the
-test body runs — the session/function scope difference is safe here.
+specific wiring to be in place. Wiring is set up by `wire` (autouse, function-scoped)
+before the test body runs — the session/function scope difference is safe here.
 
 ```python
 @pytest.fixture(scope="session")
@@ -184,19 +182,36 @@ def app():
     asyncio.run(a.call_tool("waveforms.close", {}))
 ```
 
-### `wire` fixture (function-scoped)
+### `reset_device` fixture (autouse, function-scoped)
 
-Reads the `jumperless` marker from the test node. If the device is available, clears the
-board, connects all listed signal pairs, and clears again in `finally` (so cleanup runs
-even if the test errors). If unavailable and prompts are not suppressed, prints interactive
-prompts — teardown prompt also runs in `finally`.
+Resets device state before every hardware test by closing and reopening the AD3. This
+clears all instrument allocations, active outputs, and hardware configuration left by the
+previous test, ensuring a clean slate regardless of what the previous test did or how it
+ended.
+
+```python
+@pytest.fixture(autouse=True)
+def reset_device(app):
+    asyncio.run(app.call_tool("waveforms.close", {}))
+    asyncio.run(app.call_tool("waveforms.open", {}))
+    yield
+```
+
+### `wire` fixture (autouse, function-scoped)
+
+Autouse: runs for every hardware test. Short-circuits immediately when the test has no
+`jumperless` marker, so non-marked tests are unaffected.
+
+If the device is available, clears the board, connects all listed signal pairs, and clears
+again in `finally` (cleanup runs even if the test errors). If unavailable and prompts are
+not suppressed, prints interactive prompts — teardown prompt also in `finally`.
 
 `nodes_clear()` is safe here because the invariant is: **all non-test Jumperless state is
 physical only** (components on breadboard rows, rails via header pins). There is no
 persistent programmatic routing outside of what `wire` itself adds.
 
 ```python
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def wire(request, jumperless, pytestconfig):
     marker = request.node.get_closest_marker("jumperless")
     if marker is None:
@@ -229,7 +244,8 @@ def wire(request, jumperless, pytestconfig):
 
 ## Retrofit pattern
 
-Adding Jumperless support to an existing test requires two lines:
+Adding Jumperless support to an existing test requires one line — add the marker.
+No signature change needed: `wire` and `reset_device` are autouse.
 
 ```python
 # before
@@ -239,11 +255,11 @@ def test_spi_loopback(app) -> None:
 # after
 @pytest.mark.hardware
 @pytest.mark.jumperless(connections={"loopback": ("DIO1", "DIO2")})
-def test_spi_loopback(app, wire) -> None:
+def test_spi_loopback(app) -> None:
 ```
 
-Test body is unchanged. Tests without `wire` in their signature ignore the marker entirely
-and behave as before — no regressions for tests that don't opt in.
+Test body is unchanged. Tests without the marker are unaffected — `wire` short-circuits
+when no marker is present.
 
 ---
 
