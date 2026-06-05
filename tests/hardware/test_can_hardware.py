@@ -2,17 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
 
-from dwf_mcp.server import build_app
+import pytest
 
 
 @pytest.mark.hardware
-def test_can_send_receive_loopback() -> None:
-    app = build_app(backend_name="pydwf")
-
+@pytest.mark.jumperless(connections={"loopback": ("DIO0", "DIO1")})
+def test_can_send_receive_loopback(app) -> None:
     async def run() -> None:
-        await app.call_tool("waveforms.open", {})
         await app.call_tool("can.configure", {
             "tx_pin": "dio0", "rx_pin": "dio1", "bit_rate": 125_000,
         })
@@ -21,6 +18,5 @@ def test_can_send_receive_loopback() -> None:
         assert result["id"] == 0x123, f"expected 0x123, got {result['id']}"
         assert result["data"] == [0x01, 0x02, 0x03]
         assert result["extended"] is False
-        await app.call_tool("waveforms.close", {})
 
     asyncio.run(run())
