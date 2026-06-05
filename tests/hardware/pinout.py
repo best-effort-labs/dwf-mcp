@@ -6,9 +6,10 @@ N_PER_SIDE = 15
 
 AD3_TOP_ROW = int(os.environ.get("AD3_TOP_ROW", "1"))
 AD3_BOT_ROW = int(os.environ.get("AD3_BOT_ROW", "16"))
-# AD3_FLIP=1 (default): AD3 inserted reversed relative to datasheet — row() reverses offset.
-# AD3_FLIP=0: AD3 plugged face-first via ribbon/adapter — physical order matches datasheet.
-AD3_FLIP = os.environ.get("AD3_FLIP", "1") == "1"
+# AD3_REVERSED=0 (default): AD3 in natural orientation — connector faces outward, label
+#   readable, pins appear in presented order (1+, 2+, GND, V+, W1 … DIO7).
+# AD3_REVERSED=1: AD3 faces INTO the breadboard (component side down) — pin order reversed.
+AD3_REVERSED = os.environ.get("AD3_REVERSED", "0") == "1"
 
 # Offsets are DATASHEET positions (0 = pin 1 per datasheet).
 _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
@@ -71,4 +72,4 @@ def row(signal: str) -> int | str:
         return entry
     side, offset = entry
     base = AD3_TOP_ROW if side == "top" else AD3_BOT_ROW
-    return base + (N_PER_SIDE - 1 - offset) if AD3_FLIP else base + offset
+    return base + (N_PER_SIDE - 1 - offset) if AD3_REVERSED else base + offset

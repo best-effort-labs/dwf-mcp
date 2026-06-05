@@ -40,22 +40,22 @@ def _run_fixture(gen_func, *args):
 # row() tests (tests 11-14 from spec)
 # ---------------------------------------------------------------------------
 
-def test_row_w1_flipped_default():
-    # AD3_FLIP=1 (default): W1 at ("top", 10), AD3_TOP_ROW=1 → 1 + (14-10) = 5
-    env = {"AD3_FLIP": "1", "AD3_TOP_ROW": "1", "AD3_BOT_ROW": "16"}
-    with patch.dict(os.environ, env):
-        import tests.hardware.pinout as _p
-        importlib.reload(_p)
-        assert _p.row("W1") == 5
-
-
-def test_row_w1_no_flip():
-    # AD3_FLIP=0 (face-first via ribbon): W1 at ("top", 10), AD3_TOP_ROW=1 → 1 + 10 = 11
-    env = {"AD3_FLIP": "0", "AD3_TOP_ROW": "1", "AD3_BOT_ROW": "16"}
+def test_row_w1_natural_orientation():
+    # AD3_REVERSED=0 (default): W1 at ("top", 10), AD3_TOP_ROW=1 → 1 + 10 = 11
+    env = {"AD3_REVERSED": "0", "AD3_TOP_ROW": "1", "AD3_BOT_ROW": "16"}
     with patch.dict(os.environ, env):
         import tests.hardware.pinout as _p
         importlib.reload(_p)
         assert _p.row("W1") == 11
+
+
+def test_row_w1_reversed():
+    # AD3_REVERSED=1 (facing breadboard): W1 at ("top", 10), AD3_TOP_ROW=1 → 1 + (14-10) = 5
+    env = {"AD3_REVERSED": "1", "AD3_TOP_ROW": "1", "AD3_BOT_ROW": "16"}
+    with patch.dict(os.environ, env):
+        import tests.hardware.pinout as _p
+        importlib.reload(_p)
+        assert _p.row("W1") == 5
 
 
 def test_row_gnd_string_passthrough():
