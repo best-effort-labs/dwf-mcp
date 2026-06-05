@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import warnings
 
 import pytest
+
+from dwf_mcp.server import build_app
+from tests.hardware import pinout
 
 
 @pytest.fixture(scope="session")
@@ -33,3 +37,42 @@ def jumperless(pytestconfig: pytest.Config):
         yield j
     finally:
         j.close()
+
+
+@pytest.fixture
+def app():
+    a = build_app(backend_name="pydwf")
+    asyncio.run(a.call_tool("waveforms.open", {}))
+    try:
+        yield a
+    finally:
+        asyncio.run(a.call_tool("waveforms.close", {}))
+
+
+@pytest.fixture(autouse=True)
+def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config):
+    marker = request.node.get_closest_marker("jumperless")
+    if marker is None:
+        yield
+        return
+
+    connections: dict[str, tuple[str, str]] = marker.kwargs.get("connections", {})
+    skip = pytestconfig.getoption("--skip-wiring-prompts")
+
+    if jumperless is not None:
+        jumperless.nodes_clear()
+        for n1, n2 in connections.values():
+            jumperless.connect(pinout.row(n1), pinout.row(n2))
+        try:
+            yield
+        finally:
+            jumperless.nodes_clear()
+    elif skip:
+        yield
+    else:
+        for label, (n1, n2) in connections.items():
+            input(f"  [{label}]  connect {n1} → {n2}, then press Enter ... ")
+        try:
+            yield
+        finally:
+            input("  Test done — remove connections, press Enter ... ")
