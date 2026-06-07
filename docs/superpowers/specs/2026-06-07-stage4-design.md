@@ -81,7 +81,7 @@ sniff.spi_start(clk_pin, mosi_pin, miso_pin?, cs_pin?, mode, freq_hz,
   → {sniff_id}
 
 sniff.spi_status(sniff_id)
-  → {done, word_count, error_count}
+  → {samples_received, lost_samples}
 
 sniff.spi_stop(sniff_id)
   → {artifact_path, sidecar_path, count, error_count, artifact_error?, summary}
@@ -123,7 +123,7 @@ Uses `protocol.i2c.spyStart()` then polls `spyStatus(256)` in a `poll_interval_s
 - Remaining bytes (`data[1:]` and bytes from subsequent polls before stop) are the transaction payload.
 - `stop=1` closes the transaction. Write the completed `Transaction` to the result list.
 - A repeated START (`start=1` before `stop=1`) closes the current transaction and begins a new one.
-- `nak != 0`: `nak` encodes which byte index received the NAK (0-indexed from address byte). `nak_at_byte = nak - 1` for the payload index (0 = address NAKed, 1 = first data byte NAKed, etc.) — verify exact encoding against pydwf at implementation time.
+- `nak` value: the exact encoding returned by pydwf `spyStatus` must be verified against hardware at implementation time before any formula is applied. Do not assume a specific mapping between the raw `nak` integer and `nak_at_byte` — treat this as an **implementation TODO** and add a comment in the code once the encoding is confirmed empirically.
 
 **Cleanup contract**: `i2c_spy_stop` (calls `protocol.i2c.reset()`) must be called in a `finally` block, regardless of timeout, poll error, or artifact write failure. Allocator release also happens in `finally`.
 
@@ -154,22 +154,25 @@ Uses the backend's DigitalIn record path (same hardware block as `logic.record`)
 **`sniff.spi_start`**:
 1. Claims DigitalIn resource via `claim_observe` (see Allocator Extension).
 2. Calls `backend.logic_record_configure(pin_mask, sample_rate_hz, duration=large_sentinel)` + `logic_record_arm()`. Duration is left open-ended; `sniff.spi_stop` is the explicit terminator.
-3. Starts a background `record_loop` task (same as `logic.record_start`) accumulating chunks.
+3. Starts a background `record_loop` task (same as `logic.record_start`) accumulating chunks into a `RecordingSession`.
 4. Returns `{sniff_id}`.
 
-**`sniff.spi_status`**: Returns `{done: False, word_count: N, error_count: M}` while running. `done: True` is never set by the status call — only `sniff.spi_stop` terminates capture.
+**Rollback on start failure**: if step 2 or 3 raises, `backend.logic_record_stop()` is called (best-effort) and the allocator claim is released before re-raising. The caller never receives a `sniff_id` for a session that is not fully armed.
+
+**`sniff.spi_status`**: Returns `{samples_received: N, lost_samples: M}` directly from the `RecordingSession` counters. No decode is performed; word count is not available until `sniff.spi_stop`.
 
 **`sniff.spi_stop`**:
-1. Cancels the background task.
-2. Calls `backend.logic_record_stop()`.
-3. Concatenates accumulated chunks, passes to `SpiDecoder` with `sample_rate_hz`.
-4. Writes parquet + JSON sidecar.
-5. Releases allocator claim.
-6. Returns `{artifact_path, sidecar_path, count, error_count, artifact_error?, summary}`.
+1. Cancels the background `record_loop` task.
+2. Calls `backend.logic_record_stop()` to disarm DigitalIn.
+3. **Drains remaining available samples**: polls `backend.logic_record_status()` once after stop and reads any remaining `available` samples, appending them to the session chunks. Mirrors `logic.record_stop` drain contract.
+4. Concatenates all chunks (including drain), passes to `SpiDecoder` with `sample_rate_hz`.
+5. Writes parquet + JSON sidecar.
+6. Releases allocator claim.
+7. Returns `{artifact_path, sidecar_path, count, error_count, artifact_error?, summary}`.
 
 No npz artifact is written by default (decoded directly from in-memory chunks).
 
-**Cleanup contract**: `backend.logic_record_stop()` and allocator release in `finally` inside `sniff.spi_stop`. If parquet write fails, returns `artifact_path: null, artifact_error: <str>` with accumulated counts.
+**Cleanup contract**: steps 2, 3, and 6 run in `finally` regardless of decode or artifact write failure. If parquet write fails, returns `artifact_path: null, artifact_error: <str>` with accumulated sample counts.
 
 ---
 
@@ -288,9 +291,21 @@ Add an **observer claim type** to `allocator.py`:
 - `allocator.claim_observe(instrument)` — reserves the DigitalIn hardware block as a read-only observer. No pin list needed: DigitalIn is a single global resource; claiming it prevents any other DigitalIn user (logic.capture, logic.record, another sniff.spi) from running concurrently regardless of which pins they use.
 - Observer claims **do not** conflict with write claims on any pin — DigitalOut driving a pin while DigitalIn observes the same pin is valid hardware behaviour.
 - Observer claims **do** conflict with other observer claims and with exclusive claims on the DigitalIn resource (e.g. `logic.configure` or `logic.record_start`).
-- `sniff.spi` uses `claim_observe`; all other sniff tools use the existing `claim` (exclusive) on their protocol engine pins.
+- `sniff.spi` uses `claim_observe`; all other sniff tools use the existing `claim` (exclusive) — but see Protocol Engine Resources below.
 
 This is a narrow extension — it reflects the hardware reality that DigitalIn is read-only and enables the SPI hardware test (SPI master + observer sniff) without external devices.
+
+### Protocol Engine Resources
+
+The hardware constraint (one engine per bus type) is not captured by pin-level claims alone. Two I2C configurations on non-overlapping pins would silently conflict at the hardware level under the current model.
+
+Add named engine resources to `AD3_RESOURCE_GROUPS`:
+- `i2c_engine` — exclusive; claimed by `i2c.configure` and `sniff.i2c`
+- `uart_engine` — exclusive; claimed by `uart.configure` and `sniff.uart`
+- `can_engine` — exclusive; claimed by `can.configure` and `sniff.can`
+- `spi_engine` — exclusive; claimed by `spi.configure` (sniff.spi uses `digital_in` instead)
+
+All instruments that configure a protocol engine claim both their pin list AND the corresponding engine resource. This applies to existing active instruments (`i2c.py`, `spi.py`, `uart.py`, `can.py`) as well as the new sniff tools — those instruments require a small update to add the engine resource claim alongside their existing pin claims.
 
 `observe=True` as a user-facing escape hatch on protocol-engine sniff tools (I2C/UART/CAN) remains **deferred** — the protocol engines share state with the active master and cannot safely coexist without hardware-specific validation per protocol.
 
@@ -313,7 +328,7 @@ This is a narrow extension — it reflects the hardware reality that DigitalIn i
 - `spi.transfer([0xA5, 0x5A])` sends known data (sequential call, no concurrency needed).
 - `result = sniff.spi_stop(sniff_id)` decodes capture.
 - Verify decoded MOSI words match transmitted bytes and MISO matches MOSI (loopback).
-- Run `decoder.spi` on a logic.capture npz of the same transfer; verify identical output.
+- Repeat the same `spi.transfer` call under `logic.capture` (separate test step, no sniff running) to produce an npz; run `decoder.spi` on that npz and verify identical decoded output.
 
 **`test_sniff_uart_hardware.py`** — stub with `pytest.skip("requires external UART transmitter")`. `sniff.uart` resets the UART engine on entry, making concurrent `uart.write` from the same session impossible. External setup note: USB-UART adapter TX → DIO0.
 
