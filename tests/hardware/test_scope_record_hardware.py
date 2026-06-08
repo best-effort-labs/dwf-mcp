@@ -29,14 +29,22 @@ def app(tmp_path_factory: pytest.TempPathFactory):
 
 @pytest.fixture(scope="module", autouse=True)
 def open_device(app):
-    result = asyncio.get_event_loop().run_until_complete(app.call_tool("waveforms.open", {}))
+    result = asyncio.run(app.call_tool("waveforms.open", {}))
     assert "device" in result, f"Failed to open device: {result}"
     yield
-    asyncio.get_event_loop().run_until_complete(app.call_tool("waveforms.close", {}))
+    asyncio.run(app.call_tool("waveforms.close", {}))
 
 
 @pytest.mark.asyncio
-@pytest.mark.jumperless(connections={"ch1": ("W1", "CH1_POS")})
+@pytest.mark.jumperless(connections={
+    # AD3_GND↔Jumperless GND: required so every Jumperless-routed AD3 signal shares
+    # the same ground reference as the AD3's measurement circuit.
+    "gnd_bridge": ("AD3_GND", "GND"),
+    # CH1_NEG is a true differential input — must be explicitly tied to AD3_GND for
+    # single-ended measurement; it is not internally connected to anything.
+    "ch1_neg": ("CH1_NEG", "AD3_GND"),
+    "ch1": ("W1", "CH1_POS"),
+})
 async def test_scope_record_dc_signal(app, tmp_path: Path) -> None:
     """Record a DC signal from W1 and verify mean voltage is approximately correct."""
     # Set W1 to DC at 2.0V
@@ -82,7 +90,21 @@ async def test_scope_record_dc_signal(app, tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.jumperless(connections={"ch1": ("W1", "CH1_POS"), "ch2": ("W2", "CH2_POS")})
+@pytest.mark.jumperless(connections={
+    # AD3_GND↔Jumperless GND: required so every Jumperless-routed AD3 signal shares
+    # the same ground reference as the AD3's measurement circuit.
+    "gnd_bridge": ("AD3_GND", "GND"),
+    # CH1_NEG and CH2_NEG are true differential inputs — must be explicitly tied to
+    # AD3_GND for single-ended measurement.
+    "ch1_neg": ("CH1_NEG", "AD3_GND"),
+    "ch2_neg": ("CH2_NEG", "AD3_GND"),
+    # W2->CH2_POS must be connected LAST: both W1->CH1_POS and W2->CH2_POS share a
+    # CH446Q bus row on chip1 y=4.  Connecting other signals first (with per-connect
+    # settle delay in the wire fixture) lets the firmware route W2 to a
+    # non-conflicting path when it is added last.
+    "ch1": ("W1", "CH1_POS"),
+    "ch2": ("W2", "CH2_POS"),
+})
 async def test_scope_record_two_channels(app, tmp_path: Path) -> None:
     """Record both channels simultaneously."""
     # W1 = 1.5V DC, W2 = -1.0V DC (if wired)
@@ -101,7 +123,7 @@ async def test_scope_record_two_channels(app, tmp_path: Path) -> None:
         "channels": [1, 2],
         "range_v": 5.0,
         "sample_rate_hz": 50_000.0,
-        "duration_s": 0.2,
+        "duration_s": 0.5,
     })
     record_id = result["record_id"]
 

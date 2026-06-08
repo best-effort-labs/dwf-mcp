@@ -15,7 +15,7 @@ AD3_REVERSED = os.environ.get("AD3_REVERSED", "0") == "1"
 _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     # Scope inputs — top row physical positions 0,1 → datasheet offsets 14,13
     "CH1_POS":  ("top", 14),
-    "CH2_POS":  ("top", 13),
+    "CH2_POS":  ("top", 13),  # row 14
     # Scope inputs — bottom row
     "CH1_NEG":  ("bot", 14),
     "CH2_NEG":  ("bot", 13),
@@ -25,6 +25,9 @@ _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     # Triggers
     "TRIG_IN":  ("top", 8),
     "TRIG_OUT": ("bot", 8),
+    # Power / reference pins on the AD3 header
+    "AD3_GND":  ("top", 12),   # AD3 GND pin (top row, between 2+ and V+) → row 13
+    "AD3_VPLUS": ("top", 11),  # AD3 V+ pin → row 12
     # Power — map to Jumperless rail aliases instead of breadboard rows
     "VCC":      "TOP_RAIL",
     # Digital I/O, top row (physical positions 7-14 → offsets 7-0)

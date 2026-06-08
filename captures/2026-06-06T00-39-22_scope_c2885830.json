@@ -1,0 +1,28 @@
+{
+  "instrument": "scope",
+  "captured_at": "2026-06-06T00:39:22.970546+00:00",
+  "description": null,
+  "config": {
+    "channels": [
+      2
+    ],
+    "range_v": 5.0,
+    "sample_rate_hz": 50000.0,
+    "output_path": null
+  },
+  "summary": {
+    "instrument": "scope",
+    "sample_count": 566,
+    "sample_rate_hz": 50000.0,
+    "extra": {
+      "ch2": {
+        "min": 0.08938031718295694,
+        "max": 1.030195338296195,
+        "mean": 0.09139968358431808,
+        "rms": 0.09956813623496777,
+        "freq_estimate": 44.169611307420496,
+        "sample_rate": 50000.0
+      }
+    }
+  }
+}

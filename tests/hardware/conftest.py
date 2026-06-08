@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import warnings
 
 import pytest
@@ -63,6 +64,8 @@ def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config
         jumperless.nodes_clear()
         for n1, n2 in connections.values():
             jumperless.connect(pinout.row(n1), pinout.row(n2))
+            time.sleep(0.3)  # allow CH446Q firmware to fully program each route before the next
+        time.sleep(0.1)  # final settle
         try:
             yield
         finally:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
+import time
 from contextlib import suppress
 from typing import Any, ClassVar
 
@@ -18,13 +18,6 @@ _PIN_RE = r"^dio([0-9]|1[0-5])$"
 
 def _dio_index(pin: str) -> int:
     return int(pin[3:])
-
-
-def _pins_to_mask(pins: list[str]) -> int:
-    mask = 0
-    for p in pins:
-        mask |= 1 << int(p[3:])
-    return mask
 
 
 SNIFF_I2C_SCHEMA: dict[str, Any] = {
@@ -122,7 +115,6 @@ class Sniff(Instrument):
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
     ) -> dict[str, Any]:
-        import time
         self.device.allocator.claim("sniff_i2c", ["i2c_engine", sda_pin, scl_pin])
         transactions: list[dict[str, Any]] = []
         error_count = 0
@@ -130,17 +122,19 @@ class Sniff(Instrument):
         artifact_error: str | None = None
         try:
             self.device.backend.i2c_spy_start()
-            deadline = time.monotonic() + duration_s
+            start_time = time.monotonic()
+            deadline = start_time + duration_s
             pending_bytes: list[int] = []
             in_transaction = False
 
             while time.monotonic() < deadline:
                 await asyncio.sleep(poll_interval_s)
+                current_ts = time.monotonic() - start_time
                 start, stop, data, nak = self.device.backend.i2c_spy_status(256)
 
                 if start:
                     if in_transaction and pending_bytes:
-                        _close_i2c_transaction(pending_bytes, nak, transactions)
+                        _close_i2c_transaction(pending_bytes, nak, transactions, current_ts)
                         if nak:
                             error_count += 1
                     pending_bytes = list(data)
@@ -149,7 +143,7 @@ class Sniff(Instrument):
                     pending_bytes.extend(data)
 
                 if stop and in_transaction and pending_bytes:
-                    _close_i2c_transaction(pending_bytes, nak, transactions)
+                    _close_i2c_transaction(pending_bytes, nak, transactions, current_ts)
                     if nak:
                         error_count += 1
                     pending_bytes = []
@@ -339,7 +333,7 @@ class Sniff(Instrument):
 
 
 def _close_i2c_transaction(
-    pending_bytes: list[int], nak: int, out: list[dict[str, Any]]
+    pending_bytes: list[int], nak: int, out: list[dict[str, Any]], timestamp_s: float = 0.0
 ) -> None:
     if not pending_bytes:
         return
@@ -350,7 +344,7 @@ def _close_i2c_transaction(
     # NAK encoding: verify empirically at implementation time (TODO per spec).
     nak_at_byte: int | None = nak if nak else None
     out.append({
-        "timestamp_s": 0.0,
+        "timestamp_s": timestamp_s,
         "type": direction,
         "address": address,
         "address_bits": 7,
