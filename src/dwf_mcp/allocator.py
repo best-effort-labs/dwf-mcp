@@ -33,13 +33,18 @@ class PinAllocator:
     _observe_claims: set[str] = field(default_factory=set)  # instruments with DigitalIn observer claim
 
     def claim(self, instrument: str, pins: list[str]) -> None:
-        # Replacement semantics: re-claiming for the same instrument frees its old pins first.
-        self._claims.pop(instrument, None)
-        pin_owners = self.claimed_pins()
+        # Replacement semantics: re-claiming for the same instrument logically
+        # releases its old pins. Validate against the tentative post-release view
+        # FIRST so a failed re-claim leaves the existing claim untouched (the
+        # caller's hardware state remains coherent with the allocator's record).
+        tentative_claims = {k: v for k, v in self._claims.items() if k != instrument}
+        tentative_pin_owners = {
+            pin: instr for instr, claim_pins in tentative_claims.items() for pin in claim_pins
+        }
         for pin in pins:
-            if pin in pin_owners:
+            if pin in tentative_pin_owners:
                 raise PinAllocationError(
-                    f"{instrument} cannot claim {pin}: already held by {pin_owners[pin]}"
+                    f"{instrument} cannot claim {pin}: already held by {tentative_pin_owners[pin]}"
                 )
         # "digital_in" virtual pin conflicts with any existing observer claim.
         if "digital_in" in pins and self._observe_claims:
@@ -53,14 +58,13 @@ class PinAllocator:
             requested_in_group = group.pins & set(pins)
             if not requested_in_group:
                 continue
-            for other_instr, other_pins in self._claims.items():
-                if other_instr == instrument:
-                    continue
+            for other_instr, other_pins in tentative_claims.items():
                 if set(other_pins) & group.pins:
                     raise PinAllocationError(
                         f"{instrument} cannot claim {sorted(requested_in_group)}: "
                         f"resource group {group.name!r} is held by {other_instr}"
                     )
+        # All checks passed — commit atomically.
         self._claims[instrument] = list(pins)
 
     def claim_observe(self, instrument: str) -> None:

@@ -32,6 +32,20 @@ def test_double_claim_by_same_instrument_is_replacement(alloc: PinAllocator) -> 
     assert alloc.claimed_pins() == {"dio4": "i2c", "dio5": "i2c"}
 
 
+def test_failed_reclaim_preserves_prior_claim(alloc: PinAllocator) -> None:
+    """A failed re-claim by the same instrument must NOT drop its old pins.
+    Otherwise the allocator and hardware get out of sync on conflict."""
+    alloc.claim("spi", ["dio0", "dio1"])
+    alloc.claim("uart", ["dio4"])
+
+    # spi tries to reconfigure to a pin owned by uart — should raise AND keep
+    # its original [dio0, dio1] claim.
+    with pytest.raises(PinAllocationError):
+        alloc.claim("spi", ["dio4", "dio5"])
+
+    assert alloc.claimed_pins() == {"dio0": "spi", "dio1": "spi", "dio4": "uart"}
+
+
 def test_resource_group_conflict() -> None:
     # Scope ch1 and ch2 are co-sampled: configuring one locks the other for the same instrument.
     groups = [ResourceGroup(name="scope_pair", pins={"scope1", "scope2"}, exclusive=True)]

@@ -171,6 +171,33 @@ def test_spi_start_returns_sniff_id(sniff: Sniff) -> None:
     assert isinstance(result["sniff_id"], str)
 
 
+def test_release_cancels_active_spi_sessions(sniff: Sniff) -> None:
+    """Sniff.release() must cancel background record_loop tasks for in-flight
+    SPI sessions so they don't continue polling the backend after release."""
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    # Keep record_loop alive by never reporting done.
+    fake.set_logic_record_status_sequence([(0, 0, 1)] * 100)
+
+    async def run() -> tuple[asyncio.Task, asyncio.Task | None]:
+        start = await sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000,
+        )
+        session = sniff._spi_sessions[start["sniff_id"]]
+        record_task = session.task
+        notif_task = session.notification_task
+        sniff.release()
+        # release() is sync; cancellation propagates on next await.
+        await asyncio.sleep(0.05)
+        assert record_task is not None
+        return record_task, notif_task
+
+    record_task, notif_task = asyncio.run(run())
+    assert record_task.done()
+    if notif_task is not None:
+        assert notif_task.done()
+    assert sniff._spi_sessions == {}
+
+
 def test_spi_status_reports_samples(sniff: Sniff) -> None:
     samples, _ = _spi_samples([0xA5])
     fake: FakeBackend = sniff.device.backend  # type: ignore

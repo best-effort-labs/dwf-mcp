@@ -125,6 +125,7 @@ class Sniff(Instrument):
         error_count = 0
         artifact_path: str | None = None
         artifact_error: str | None = None
+        spy_started = False
         try:
             self.device.backend.i2c_configure(
                 scl_pin_idx=_dio_index(scl_pin),
@@ -134,6 +135,7 @@ class Sniff(Instrument):
                 timeout_s=0.0,
             )
             self.device.backend.i2c_spy_start()
+            spy_started = True
             start_time = time.monotonic()
             deadline = start_time + duration_s
             pending_bytes: list[int] = []
@@ -177,10 +179,11 @@ class Sniff(Instrument):
                 log.exception("sniff.i2c artifact write failed")
                 artifact_error = str(exc)
         finally:
-            try:
-                self.device.backend.i2c_spy_stop()
-            except Exception as exc:
-                log.warning("i2c_spy_stop failed: %s", exc)
+            if spy_started:
+                try:
+                    self.device.backend.i2c_spy_stop()
+                except Exception as exc:
+                    log.warning("i2c_spy_stop failed: %s", exc)
             self.device.allocator.release("sniff_i2c")
 
         sidecar_path = artifact_path.replace(".parquet", ".json") if artifact_path else None
@@ -486,7 +489,14 @@ class Sniff(Instrument):
         self.device.allocator.release("sniff_i2c")
         self.device.allocator.release("sniff_uart")
         self.device.allocator.release("sniff_can")
-        for sniff_id in list(self._spi_sessions):
+        for sniff_id, session in list(self._spi_sessions.items()):
+            # Cancel background record_loop / notification_loop tasks so they don't
+            # keep polling the backend after release. cancel() is sync-safe; the
+            # CancelledError is delivered to the task on its next await point.
+            if session.task is not None and not session.task.done():
+                session.task.cancel()
+            if session.notification_task is not None and not session.notification_task.done():
+                session.notification_task.cancel()
             try:
                 self.device.backend.logic_record_stop()
             except Exception as exc:
