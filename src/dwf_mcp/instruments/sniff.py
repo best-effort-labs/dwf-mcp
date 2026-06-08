@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from contextlib import suppress
 from typing import Any, ClassVar
 
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument
+from dwf_mcp.streaming import RecordingSession, record_loop
 
 log = logging.getLogger(__name__)
 
@@ -310,16 +312,156 @@ class Sniff(Instrument):
             "summary": {},
         }
 
-    # --- spi_start / spi_status / spi_stop (implemented in Task 9) ---
+    # --- spi_start / spi_status / spi_stop ---
 
-    async def spi_start(self, **kwargs: Any) -> dict[str, Any]:
-        raise NotImplementedError("implement in Task 9")
+    async def spi_start(
+        self,
+        clk_pin: str,
+        mosi_pin: str,
+        mode: int,
+        freq_hz: float,
+        miso_pin: str | None = None,
+        cs_pin: str | None = None,
+        poll_interval_s: float = 0.010,
+        output_path: str | None = None,
+    ) -> dict[str, Any]:
+        sample_rate_hz = freq_hz * 10  # 10× oversampling
+        pins = [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None]
+        pin_mask = sum(1 << int(p[3:]) for p in pins)
+
+        sniff_id = str(uuid.uuid4())
+        allocator_key = f"sniff_spi_{sniff_id}"
+        self.device.allocator.claim_observe(allocator_key)
+        try:
+            self.device.backend.logic_record_configure(
+                pin_mask=pin_mask,
+                sample_rate_hz=sample_rate_hz,
+                duration_s=3600.0,  # open-ended; spi_stop terminates capture
+            )
+            self.device.backend.logic_record_arm()
+        except Exception:
+            with suppress(Exception):
+                self.device.backend.logic_record_stop()
+            self.device.allocator.release(allocator_key)
+            raise
+
+        session = RecordingSession(
+            record_id=sniff_id,
+            task=None,
+            notification_task=None,
+            queue=asyncio.Queue(maxsize=32),
+            chunks=[],
+            lost_samples=0,
+            done=False,
+            error=None,
+            meta={
+                "pins": pins,
+                "sample_rate_hz": sample_rate_hz,
+                "clk_pin": clk_pin,
+                "mosi_pin": mosi_pin,
+                "miso_pin": miso_pin,
+                "cs_pin": cs_pin,
+                "mode": mode,
+                "output_path": output_path,
+                "allocator_key": allocator_key,
+            },
+        )
+        session.task = asyncio.create_task(
+            record_loop(
+                session,
+                self.device.backend.logic_record_status,
+                self.device.backend.logic_record_read,
+            )
+        )
+        self._spi_sessions[sniff_id] = session
+        return {"sniff_id": sniff_id}
 
     def spi_status(self, sniff_id: str) -> dict[str, Any]:
-        raise NotImplementedError("implement in Task 9")
+        session = self._spi_sessions.get(sniff_id)
+        if session is None:
+            raise ValueError(f"unknown sniff_id {sniff_id!r}")
+        total_samples = sum(len(c) for c in session.chunks)
+        return {"samples_received": total_samples, "lost_samples": session.lost_samples}
 
     async def spi_stop(self, sniff_id: str) -> dict[str, Any]:
-        raise NotImplementedError("implement in Task 9")
+        import numpy as np
+        from dwf_mcp.instruments.decoder.spi import SpiDecoder
+
+        session = self._spi_sessions.pop(sniff_id, None)
+        if session is None:
+            raise ValueError(f"unknown sniff_id {sniff_id!r}")
+
+        artifact_path: str | None = None
+        artifact_error: str | None = None
+        count = 0
+        error_count = 0
+        try:
+            # 1. Cancel background task
+            if session.task is not None:
+                session.task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await session.task
+
+            # 2. Stop hardware
+            with suppress(Exception):
+                self.device.backend.logic_record_stop()
+
+            # 3. Drain remaining samples
+            try:
+                available, lost, _ = self.device.backend.logic_record_status()
+                session.lost_samples += lost
+                if available > 0:
+                    chunk = self.device.backend.logic_record_read(available)
+                    session.chunks.append(chunk)
+            except Exception as exc:
+                log.warning("spi_stop drain failed: %s", exc)
+
+            # 4. Decode
+            if session.chunks:
+                try:
+                    all_samples = np.concatenate(session.chunks, axis=0)
+                    meta = session.meta
+                    pins = meta["pins"]
+                    pin_map: dict[str, int] = {
+                        "clk":  pins.index(meta["clk_pin"]),
+                        "mosi": pins.index(meta["mosi_pin"]),
+                    }
+                    if meta["miso_pin"] and meta["miso_pin"] in pins:
+                        pin_map["miso"] = pins.index(meta["miso_pin"])
+                    if meta["cs_pin"] and meta["cs_pin"] in pins:
+                        pin_map["cs"] = pins.index(meta["cs_pin"])
+
+                    decoder = SpiDecoder()
+                    txns = decoder.decode(
+                        all_samples, pin_map,
+                        sample_rate_hz=meta["sample_rate_hz"],
+                        mode=meta["mode"],
+                    )
+                    count = len(txns)
+                    error_count = sum(1 for t in txns if t.error)
+                    records = [t.to_dict() for t in txns]
+                    result = self.artifacts.write_parquet(
+                        "sniff_spi", records,
+                        config={k: v for k, v in meta.items() if k != "allocator_key"},
+                        output_path=meta.get("output_path"),
+                    )
+                    artifact_path = result.path
+                except Exception as exc:
+                    log.exception("spi_stop decode/write failed for sniff_id=%r", sniff_id)
+                    artifact_error = str(exc)
+        finally:
+            self.device.allocator.release(session.meta["allocator_key"])
+
+        sidecar_path = artifact_path.replace(".parquet", ".json") if artifact_path else None
+        return {
+            "artifact_path": artifact_path,
+            "sidecar_path": sidecar_path,
+            "count": count,
+            "error_count": error_count,
+            "lost_samples": session.lost_samples,
+            "artifact_error": artifact_error,
+            "summary": {},
+        }
 
     def release(self) -> None:
         self.device.allocator.release("sniff_i2c")

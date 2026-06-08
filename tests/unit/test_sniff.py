@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from dwf_mcp.allocator import PinAllocator
@@ -12,6 +13,7 @@ from dwf_mcp.device import DwfDevice
 from dwf_mcp.devices.ad3 import AD3_RESOURCE_GROUPS
 from dwf_mcp.instruments.sniff import Sniff
 from dwf_mcp.policy import SafetyPolicy
+from tests.unit.test_spi_decoder import _spi_samples
 
 
 @pytest.fixture
@@ -116,3 +118,71 @@ def test_sniff_i2c_calls_spy_stop_on_completion(sniff: Sniff) -> None:
     spy_calls = [c[0] for c in fake.sniff_calls]
     assert "i2c_spy_start" in spy_calls
     assert "i2c_spy_stop" in spy_calls
+
+
+# --- sniff.spi_start / spi_status / spi_stop ---
+
+
+def test_spi_start_returns_sniff_id(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(10, 0, 1), (0, 0, 0)])
+
+    async def run() -> dict:
+        result = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000)
+        await sniff.spi_stop(result["sniff_id"])
+        return result
+
+    result = asyncio.run(run())
+    assert "sniff_id" in result
+    assert isinstance(result["sniff_id"], str)
+
+
+def test_spi_status_reports_samples(sniff: Sniff) -> None:
+    samples, _ = _spi_samples([0xA5])
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake._logic_record_canned_chunk = samples
+    fake.set_logic_record_status_sequence([(len(samples), 0, 1), (0, 0, 0)])
+
+    async def run() -> tuple[dict, dict]:
+        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000)
+        await asyncio.sleep(0.05)
+        status = sniff.spi_status(start["sniff_id"])
+        stop_result = await sniff.spi_stop(start["sniff_id"])
+        return status, stop_result
+
+    status, _ = asyncio.run(run())
+    assert "samples_received" in status
+    assert "lost_samples" in status
+
+
+def test_spi_stop_decodes_and_writes_parquet(sniff: Sniff) -> None:
+    samples, _ = _spi_samples([0xA5, 0x5A])
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake._logic_record_canned_chunk = samples
+    fake.set_logic_record_status_sequence([(len(samples), 0, 1), (0, 0, 0)])
+
+    async def run() -> dict:
+        start = await sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", miso_pin="dio2", cs_pin="dio3",
+            mode=0, freq_hz=100_000,
+        )
+        await asyncio.sleep(0.05)
+        return await sniff.spi_stop(start["sniff_id"])
+
+    result = asyncio.run(run())
+    assert result["artifact_error"] is None, f"decode error: {result['artifact_error']}"
+    assert result["artifact_path"] is not None
+    assert result["count"] >= 2
+
+
+def test_spi_stop_releases_observer_claim(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 0)])
+
+    async def run() -> None:
+        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000)
+        await sniff.spi_stop(start["sniff_id"])
+
+    asyncio.run(run())
+    # After stop, DigitalIn observer is released — can claim logic again
+    assert len(sniff.device.allocator._observe_claims) == 0
