@@ -44,7 +44,22 @@ sniff.i2c_stop(sniff_id)
   → {artifact_path, sidecar_path, count, error_count, artifact_error?, summary}
 ```
 
-`max_duration_s` is **required** and bounds the worst-case memory footprint. The capture auto-stops after `max_duration_s` even if `*_stop` is never called (prevents orphan sessions from holding hardware indefinitely). `*_status` returns `done=True` once the capture has self-stopped; the caller still has to call `*_stop` to drain samples, decode, and release the claim.
+`max_duration_s` is **required** and bounds the worst-case capture-buffer footprint. The capture auto-stops after `max_duration_s` even if `*_stop` is never called. `*_status` returns `done=True` once the capture has self-stopped.
+
+### Orphan-session reaping
+
+Auto-stop releases the *hardware* (DigitalIn block goes idle) but the allocator claim and chunk buffers remain held until either `*_stop` is called or the session is reaped. Without reaping, a caller that crashes or forgets `*_stop` after auto-stop leaks the `claim_observe` until `waveforms.close`, blocking other observers.
+
+Reaping rule: on every `*_start` and `*_status` call, the Sniff instrument runs a sweep that releases any auto-stopped session whose `completed_at` is older than `SNIFF_REAP_AFTER_S` (default 300 s — 5 minutes). Reaping:
+
+1. Cancels the (already-completed) background task.
+2. Calls `backend.logic_record_stop()` for idempotency (cheap if already stopped).
+3. Releases the `claim_observe`.
+4. Drops the session from `_spi_sessions` / `_async_sniff_sessions`.
+
+After a session has been reaped, calling `*_status` or `*_stop` with its `sniff_id` returns the standard "unknown sniff_id" `ValueError`. The reap timestamp is logged at WARNING level so silent data loss doesn't go unnoticed.
+
+`*_stop` called within the retention window works normally: drain, decode, write artifact, release.
 
 Same three-tool shape for `uart` and `can`. The start tool returns immediately; capture runs in a background `record_loop` task; stop terminates capture, decodes via the software decoder, and writes a parquet matching the existing `sniff.{i2c,uart,can}` row schema.
 
@@ -240,7 +255,7 @@ DECODER_CAN_SCHEMA = {
 
 ### `sniff.*_start` schemas (async observe-mode)
 
-Each start tool takes the same protocol params as its blocking counterpart **plus** required `max_duration_s` (memory cap + auto-stop) and an optional `sample_rate_hz` override. Without override, sample rate defaults to `10 × clock_hz` (I2C), `10 × baud` (UART), or `20 × bitrate` (CAN — needed for the 75% sample point per the CAN section).
+Each start tool takes the same protocol params as its blocking counterpart **plus** required `max_duration_s` (memory cap + auto-stop) and an optional `sample_rate_hz` (overrides the per-protocol default). Without override, sample rate defaults to `10 × clock_hz` (I2C), `10 × baud` (UART), or `20 × bitrate` (CAN — needed for the 75% sample point per the CAN section).
 
 ```python
 SNIFF_I2C_START_SCHEMA = {
@@ -291,7 +306,11 @@ SNIFF_CAN_START_SCHEMA = {
 
 **Sample-rate caps (enforced at `*_start`):**
 - Floor: enforced per-protocol (I2C requires ≥ 4× clock, UART ≥ 4× baud, CAN ≥ 8× bitrate per the CAN section). Below the floor → `ValueError`.
-- Ceiling: `sample_rate_hz × max_duration_s × n_pins ≤ 100 MB raw` (uint8 per sample). Above → `ValueError` with a suggested cap. Bounded because `max_duration_s` is required and itself capped at 3600 s.
+- Ceiling: `sample_rate_hz × max_duration_s × n_pins ≤ 32 MB raw` (uint8 per sample). Above → `ValueError` with a suggested cap.
+
+**Why 32 MB raw (not 100 MB):** `*_stop` concatenates the chunk list into a single contiguous array before handing it to the decoder (`np.concatenate` allocates the full target buffer while the source chunks are still alive). Peak memory during that step is **2× raw** plus the decoded parquet records (typically << raw for the protocols we support: a few hundred bytes per I2C transaction or CAN frame). Bounding raw at 32 MB keeps the worst-case decode peak under ~100 MB. The future streaming/incremental decode noted under "Open Questions" would let us raise this without a peak-memory penalty.
+
+Bounded because `max_duration_s` is required and itself capped at 3600 s.
 
 The existing blocking `sniff.{i2c,uart,can}` schemas are unchanged. No `observe` flag added anywhere.
 
@@ -328,7 +347,7 @@ A missing or malformed sidecar is a hard error returned via `artifact_error`. Un
 - `tests/unit/test_uart_decoder.py` — generator for byte sequences at various baud / parity / stop / polarity combinations. Cover: clean bytes, parity error, framing error, break condition.
 - `tests/unit/test_can_decoder.py` — generator for standard CAN frames. Cover: simple frame, max-DLC (8 bytes), bit-stuffing required, CRC mismatch.
 - `tests/unit/test_decoder.py` already covers the tool-layer dispatch; extend with i2c/uart/can cases that pass a real (small) capture file through and assert the artifact path + count.
-- `tests/unit/test_sniff.py` extends to cover the new `sniff.{i2c,uart,can}_start/status/stop` async tools against the fake backend: start succeeds; status reports samples + `done`; stop decodes + releases claim; start-failure rollback releases the claim and stops record mode; `max_duration_s` self-stops (status returns `done=True` after the cap); memory-cap violation at start raises `ValueError` before any hardware call.
+- `tests/unit/test_sniff.py` extends to cover the new `sniff.{i2c,uart,can}_start/status/stop` async tools against the fake backend: start succeeds; status reports samples + `done`; stop decodes + releases claim; start-failure rollback releases the claim and stops record mode; `max_duration_s` self-stops (status returns `done=True` after the cap); memory-cap violation at start raises `ValueError` before any hardware call; **session reaping** — after `SNIFF_REAP_AFTER_S` elapses on an auto-stopped session, a subsequent `*_start` or `*_status` call releases the orphan claim and a later `*_stop` with the reaped id returns the standard "unknown sniff_id" error.
 
 ### Hardware tests
 
@@ -340,6 +359,8 @@ CAN hardware test remains gated on having an external transceiver (same as Stage
 
 ---
 
-## Open Questions (to resolve during implementation)
+## Open Questions / Future Work
 
-None outstanding from the design — the sample-rate cap, sample-point handling, allocator behavior, and observe-mode lifecycle are now spec'd. Implementation may surface details (e.g., exact tolerance for the CAN sample-point on noisy captures), but those are tactical and won't reshape the design.
+- **Streaming/incremental decode.** Stage 5 buffers all chunks until `*_stop` and concatenates before decoding. This caps raw at 32 MB to keep peak memory ≈ 100 MB. A future revision could make each decoder stateful (`feed(chunk)` / `finalize()`), letting `record_loop` decode chunks as they arrive and write to parquet incrementally. That would lift the 32 MB cap to whatever fits on disk and remove the 2× concat spike. Not in Stage 5 because the protocol-engine sniff tools (which Stage 5 doesn't replace) handle long captures fine, and the bounded observe-mode case fits comfortably in 32 MB.
+- **Configurable reap window.** `SNIFF_REAP_AFTER_S` is a module constant in Stage 5. If users need per-session retention they can call `*_stop` immediately to bypass; tweaking the default is a one-line change. A `reap_after_s` parameter on `*_start` could be added if a use case appears.
+- **CAN sample-point tolerance on noisy captures.** The 75% sample point is the CiA recommendation but real buses may need adjustment for ringing or transceiver delay. If decoded bit-error rates are high on real traffic, expose `sample_point_pct` as an optional tuning parameter.
