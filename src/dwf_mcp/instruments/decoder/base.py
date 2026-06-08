@@ -32,6 +32,26 @@ class SpiTransaction:
 
 
 @dataclass
+class UartFrame:
+    timestamp_s: float
+    data: bytes              # decoded byte (one byte per frame)
+    parity_error: bool
+    framing_error: bool
+    error: bool = False
+    error_detail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timestamp_s": self.timestamp_s,
+            "data": self.data,
+            "parity_error": self.parity_error,
+            "framing_error": self.framing_error,
+            "error": self.error,
+            "error_detail": self.error_detail,
+        }
+
+
+@dataclass
 class I2cTransaction:
     timestamp_s: float
     type: str                # "read" or "write"
