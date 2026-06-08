@@ -43,7 +43,9 @@ class CanDecoder(Decoder):
 
     Supported:
         - Standard 11-bit identifiers.
-        - DLC 0-8 with the matching data field.
+        - DLC 0-8 with the matching data field. Raw DLC values 9-15 are
+          preserved in the decoded frame but flagged ``error_type="form"``;
+          the data field is read as 8 bytes (per classic CAN spec).
         - CRC-15 (polynomial 0x4599) validation.
         - Bit-stuffing destuffing through the CRC field.
 
@@ -186,17 +188,22 @@ def _parse_can_frame(
     dlc_raw = 0
     for _ in range(4):
         dlc_raw = (dlc_raw << 1) | next_logical()
-    dlc = min(dlc_raw, 8)
+    # The wire value of DLC may be 9–15 on classic CAN; the data field is
+    # still capped at 8 bytes by the spec. Preserve the raw value in the
+    # decoded frame but only read 8 bytes of data, and flag this as a form
+    # error so callers can distinguish it from a well-formed frame.
+    data_field_len = min(dlc_raw, 8)
+    dlc_over_8 = dlc_raw > 8
     data_bytes = bytearray()
     # Per CAN spec, when RTR=1 no data field is transmitted regardless of DLC.
     if not rtr:
-        for _ in range(dlc):
+        for _ in range(data_field_len):
             byte = 0
             for _ in range(8):
                 byte = (byte << 1) | next_logical()
             data_bytes.append(byte)
 
-    crc_input = consumed[1:]  # exclude SOF
+    crc_input = consumed[1:]  # exclude SOF; uses the actually-transmitted bits
     expected_crc = can_crc15(crc_input)
 
     rx_crc = 0
@@ -204,17 +211,32 @@ def _parse_can_frame(
         rx_crc = (rx_crc << 1) | next_logical()
     crc_valid = (rx_crc == expected_crc)
 
+    if dlc_over_8:
+        error_type: str | None = "form"
+        error_flag = True
+        error_detail: str | None = (
+            f"DLC={dlc_raw} > 8 (classic CAN max); data field clamped to 8 bytes"
+        )
+    elif not crc_valid:
+        error_type = "crc"
+        error_flag = True
+        error_detail = "crc mismatch"
+    else:
+        error_type = None
+        error_flag = False
+        error_detail = None
+
     frame = CanFrame(
         timestamp_s=timestamp_s,
         frame_id=frame_id,
         extended=False,
         rtr=rtr,
-        dlc=dlc,
+        dlc=dlc_raw,
         data=bytes(data_bytes),
         crc_valid=crc_valid,
         ack_received=None,
-        error_type=None if crc_valid else "crc",
-        error=not crc_valid,
-        error_detail=None if crc_valid else "crc mismatch",
+        error_type=error_type,
+        error=error_flag,
+        error_detail=error_detail,
     )
     return frame, state["bit_idx"]
