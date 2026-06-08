@@ -59,6 +59,13 @@ _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     "ADC2":         "ADC2",
     "ADC3":         "ADC3",
     "ADC4":         "ADC4",
+    # RP2350B routable GPIO / UART — pass through as string node aliases
+    "UART_TX":      "UART_TX",   # RP2350B GP0, machine.UART(0, tx=Pin(0))
+    "UART_RX":      "UART_RX",   # RP2350B GP1, machine.UART(0, rx=Pin(1))
+    "GPIO_1":       "GPIO_1",    # RP2350B GP20, machine.I2C(0, sda=Pin(20), ...)
+    "GPIO_2":       "GPIO_2",    # RP2350B GP21, machine.I2C(0, scl=Pin(21), ...)
+    "GPIO_3":       "GPIO_3",    # RP2350B GP22
+    "GPIO_4":       "GPIO_4",    # RP2350B GP23
     # Pre-placed I2C pull-up resistors — direct row numbers (vertical, bridging gap)
     "I2C_SDA_R_A":  28,
     "I2C_SDA_R_B":  58,
