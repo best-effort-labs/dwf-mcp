@@ -34,7 +34,7 @@ def can(device: DwfDevice, tmp_path: Path) -> CAN:
 def test_configure_claims_both_pins(can: CAN) -> None:
     can.configure(tx_pin="dio0", rx_pin="dio1", bit_rate=500_000)
     claimed = can.device.allocator.claimed_pins()
-    assert set(claimed.keys()) == {"dio0", "dio1"}
+    assert set(claimed.keys()) == {"can_engine", "dio0", "dio1"}
 
 
 def test_configure_calls_backend(can: CAN) -> None:

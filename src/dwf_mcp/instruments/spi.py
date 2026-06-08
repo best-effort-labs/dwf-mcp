@@ -84,7 +84,7 @@ class SPI(Instrument):
         miso_idx = _dio_index(miso_pin) if miso_pin else None
         cs_idx = _dio_index(cs_pin) if cs_pin else None
 
-        self.device.allocator.claim("spi", pins)
+        self.device.allocator.claim("spi", ["spi_engine"] + pins)
         self._configured = False
         self._mosi_pin = None
         self._miso_pin = None

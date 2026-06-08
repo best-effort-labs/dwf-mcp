@@ -60,7 +60,7 @@ class CAN(Instrument):
     ) -> dict[str, Any]:
         tx_idx = _dio_index(tx_pin)
         rx_idx = _dio_index(rx_pin)
-        self.device.allocator.claim("can", [tx_pin, rx_pin])
+        self.device.allocator.claim("can", ["can_engine", tx_pin, rx_pin])
         self._configured = False
         try:
             self.device.backend.can_configure(

@@ -34,17 +34,17 @@ def uart(device: DwfDevice, tmp_path: Path) -> UART:
 def test_configure_both_pins_claims_both(uart: UART) -> None:
     uart.configure(baud_rate=115200, tx_pin="dio0", rx_pin="dio1")
     claimed = uart.device.allocator.claimed_pins()
-    assert set(claimed.keys()) == {"dio0", "dio1"}
+    assert set(claimed.keys()) == {"uart_engine", "dio0", "dio1"}
 
 
 def test_configure_tx_only(uart: UART) -> None:
     uart.configure(baud_rate=115200, tx_pin="dio0")
-    assert set(uart.device.allocator.claimed_pins().keys()) == {"dio0"}
+    assert set(uart.device.allocator.claimed_pins().keys()) == {"uart_engine", "dio0"}
 
 
 def test_configure_rx_only(uart: UART) -> None:
     uart.configure(baud_rate=115200, rx_pin="dio1")
-    assert set(uart.device.allocator.claimed_pins().keys()) == {"dio1"}
+    assert set(uart.device.allocator.claimed_pins().keys()) == {"uart_engine", "dio1"}
 
 
 def test_configure_neither_raises(uart: UART) -> None:

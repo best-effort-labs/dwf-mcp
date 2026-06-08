@@ -92,7 +92,7 @@ class I2C(Instrument):
         scl_idx = _dio_index(scl_pin)
         # Partial-failure pattern: claim pins, clear stale state, try backend calls,
         # on failure release the I2C claim entirely (configure is fresh-state each call).
-        self.device.allocator.claim("i2c", [sda_pin, scl_pin])
+        self.device.allocator.claim("i2c", ["i2c_engine", sda_pin, scl_pin])
         self._configured = False
         self._sda_pin = None
         self._scl_pin = None

@@ -18,6 +18,17 @@ AD3_ANALOG_OUT_PINS: list[str] = ["awg1", "awg2"]
 AD3_SUPPLY_PINS: list[str] = ["vpos", "vneg"]
 AD3_TRIGGER_PINS: list[str] = ["trig1", "trig2"]
 
+# Virtual resource names for hardware protocol engines (not physical pins).
+# Including these in allocator.claim() prevents two different instruments from
+# silently reconfiguring the same hardware engine.
+AD3_ENGINE_PINS = {
+    "i2c": "i2c_engine",
+    "spi": "spi_engine",
+    "uart": "uart_engine",
+    "can": "can_engine",
+    "digital_in": "digital_in",
+}
+
 AD3_RESOURCE_GROUPS: list[ResourceGroup] = [
     # Scope channels are co-sampled — claiming one for the scope locks the pair.
     # Non-exclusive so the scope instrument can claim both channels, and so dmm (which reuses

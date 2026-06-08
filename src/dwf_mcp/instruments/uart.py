@@ -73,7 +73,7 @@ class UART(Instrument):
         tx_idx = _dio_index(tx_pin) if tx_pin else None
         rx_idx = _dio_index(rx_pin) if rx_pin else None
 
-        self.device.allocator.claim("uart", pins)
+        self.device.allocator.claim("uart", ["uart_engine"] + pins)
         self._configured = False
         self._tx_pin = None
         self._rx_pin = None

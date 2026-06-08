@@ -35,14 +35,14 @@ def test_configure_claims_pins(spi: SPI) -> None:
     spi.configure(clk_pin="dio0", frequency_hz=1_000_000, mode=0,
                   mosi_pin="dio1", miso_pin="dio2", cs_pin="dio3")
     claimed = spi.device.allocator.claimed_pins()
-    assert set(claimed.keys()) == {"dio0", "dio1", "dio2", "dio3"}
+    assert set(claimed.keys()) == {"spi_engine", "dio0", "dio1", "dio2", "dio3"}
     assert all(v == "spi" for v in claimed.values())
 
 
 def test_configure_clk_only(spi: SPI) -> None:
     spi.configure(clk_pin="dio0", frequency_hz=1_000_000, mode=0)
     claimed = spi.device.allocator.claimed_pins()
-    assert set(claimed.keys()) == {"dio0"}
+    assert set(claimed.keys()) == {"spi_engine", "dio0"}
 
 
 def test_configure_calls_backend(spi: SPI) -> None:
