@@ -52,6 +52,36 @@ class UartFrame:
 
 
 @dataclass
+class CanFrame:
+    timestamp_s: float
+    frame_id: int
+    extended: bool
+    rtr: bool
+    dlc: int
+    data: bytes
+    crc_valid: bool | None
+    ack_received: bool | None
+    error_type: str | None
+    error: bool
+    error_detail: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timestamp_s": self.timestamp_s,
+            "frame_id": self.frame_id,
+            "extended": self.extended,
+            "rtr": self.rtr,
+            "dlc": self.dlc,
+            "data": self.data,
+            "crc_valid": self.crc_valid,
+            "ack_received": self.ack_received,
+            "error_type": self.error_type,
+            "error": self.error,
+            "error_detail": self.error_detail,
+        }
+
+
+@dataclass
 class I2cTransaction:
     timestamp_s: float
     type: str                # "read" or "write"
