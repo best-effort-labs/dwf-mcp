@@ -307,3 +307,71 @@ def test_spi_stop_releases_observer_claim(sniff: Sniff) -> None:
     asyncio.run(run())
     # After stop, DigitalIn observer is released — can claim logic again
     assert len(sniff.device.allocator._observe_claims) == 0
+
+
+# --- sniff.i2c_start / i2c_status / i2c_stop (async observe-mode) ---
+
+
+def test_sniff_i2c_start_returns_id(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 1)])
+
+    async def run() -> dict:
+        r = await sniff.i2c_start(
+            sda_pin="dio0", scl_pin="dio1", clock_hz=100_000, max_duration_s=0.1,
+        )
+        await sniff.i2c_stop(r["sniff_id"])
+        return r
+
+    result = asyncio.run(run())
+    assert "sniff_id" in result
+    assert isinstance(result["sniff_id"], str)
+
+
+def test_sniff_i2c_start_memory_cap_raises(sniff: Sniff) -> None:
+    with pytest.raises(ValueError, match="32 MB"):
+        asyncio.run(sniff.i2c_start(
+            sda_pin="dio0", scl_pin="dio1", clock_hz=100_000,
+            max_duration_s=3600, sample_rate_hz=100e6,
+        ))
+
+
+def test_sniff_i2c_start_oversampling_rejected(sniff: Sniff) -> None:
+    with pytest.raises(ValueError, match="oversampling"):
+        asyncio.run(sniff.i2c_start(
+            sda_pin="dio0", scl_pin="dio1", clock_hz=100_000,
+            max_duration_s=0.1, sample_rate_hz=200_000,  # 2x — below 4x floor
+        ))
+
+
+def test_sniff_i2c_does_not_claim_engine_or_dio(sniff: Sniff) -> None:
+    """observe-mode must not block a concurrent i2c master on the same wires."""
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 1)])
+
+    async def run() -> None:
+        r = await sniff.i2c_start(
+            sda_pin="dio0", scl_pin="dio1", clock_hz=100_000, max_duration_s=0.1,
+        )
+        # A separate instrument MUST be able to claim i2c_engine + the same DIO pins.
+        sniff.device.allocator.claim("i2c_master", ["i2c_engine", "dio0", "dio1"])
+        await sniff.i2c_stop(r["sniff_id"])
+
+    asyncio.run(run())
+
+
+def test_sniff_i2c_status_reports_done(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 0)])  # done=True on first poll
+
+    async def run() -> dict:
+        r = await sniff.i2c_start(
+            sda_pin="dio0", scl_pin="dio1", clock_hz=100_000, max_duration_s=0.1,
+        )
+        await asyncio.sleep(0.05)
+        status = sniff.i2c_status(r["sniff_id"])
+        await sniff.i2c_stop(r["sniff_id"])
+        return status
+
+    status = asyncio.run(run())
+    assert status["done"] is True

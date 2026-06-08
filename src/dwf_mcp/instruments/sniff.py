@@ -13,9 +13,12 @@ from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument
 from dwf_mcp.instruments._async_sniff import (
     _AsyncSniffSession,
+    check_memory_cap,
+    reap_completed_sessions,
     start_observe_session,
     stop_observe_session,
 )
+from dwf_mcp.instruments.decoder.i2c import I2cDecoder
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +98,27 @@ SPI_STOP_SCHEMA: dict[str, Any] = {
     "properties": {"sniff_id": {"type": "string"}},
 }
 
+SNIFF_I2C_START_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["sda_pin", "scl_pin", "clock_hz", "max_duration_s"],
+    "properties": {
+        "sda_pin": {"type": "string", "pattern": _PIN_RE},
+        "scl_pin": {"type": "string", "pattern": _PIN_RE},
+        "clock_hz": {"type": "integer", "minimum": 1_000},
+        "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
+        "sample_rate_hz": {"type": "number", "minimum": 1_000.0},
+        "output_path": {"type": "string"},
+    },
+}
+
+SNIFF_STATUS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["sniff_id"],
+    "properties": {"sniff_id": {"type": "string"}},
+}
+
+SNIFF_STOP_SCHEMA: dict[str, Any] = SNIFF_STATUS_SCHEMA
+
 
 class Sniff(Instrument):
     name = "sniff"
@@ -105,12 +129,19 @@ class Sniff(Instrument):
         "spi_start":  ("spi_start",  SPI_START_SCHEMA),
         "spi_status": ("spi_status", SPI_STATUS_SCHEMA),
         "spi_stop":   ("spi_stop",   SPI_STOP_SCHEMA),
+        "i2c_start":  ("i2c_start",  SNIFF_I2C_START_SCHEMA),
+        "i2c_status": ("i2c_status", SNIFF_STATUS_SCHEMA),
+        "i2c_stop":   ("i2c_stop",   SNIFF_STOP_SCHEMA),
     }
 
     def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
         self.device = device
         self.artifacts = artifacts
         self._spi_sessions: dict[str, _AsyncSniffSession] = {}
+        # Shared session dict for the async observe-mode sniff tools
+        # (i2c_*, uart_*, can_*). SPI keeps its own dict for backwards
+        # compatibility with existing tests that reach into ``_spi_sessions``.
+        self._async_sessions: dict[str, _AsyncSniffSession] = {}
 
     # --- sniff.i2c ---
 
@@ -446,6 +477,113 @@ class Sniff(Instrument):
             "summary": {},
         }
 
+    # --- sniff.i2c_start / i2c_status / i2c_stop (async observe-mode) ---
+
+    async def i2c_start(
+        self,
+        sda_pin: str,
+        scl_pin: str,
+        clock_hz: int,
+        max_duration_s: float,
+        sample_rate_hz: float | None = None,
+        output_path: str | None = None,
+    ) -> dict[str, Any]:
+        rate = float(sample_rate_hz) if sample_rate_hz else float(clock_hz) * 10.0
+        if rate / float(clock_hz) < 4.0:
+            raise ValueError(
+                f"I2C decode requires >=4x oversampling, got {rate / float(clock_hz):.1f}x"
+            )
+        check_memory_cap(rate, max_duration_s, n_pins=2)
+
+        sniff_id = str(uuid.uuid4())
+        allocator_key = f"sniff_i2c_{sniff_id}"
+        pin_mask = (1 << _dio_index(sda_pin)) | (1 << _dio_index(scl_pin))
+        meta: dict[str, Any] = {
+            "sniff_id": sniff_id,
+            "sda_pin": sda_pin,
+            "scl_pin": scl_pin,
+            "clock_hz": clock_hz,
+            "sample_rate_hz": rate,
+            "max_duration_s": max_duration_s,
+            "output_path": output_path,
+        }
+        session = start_observe_session(
+            device=self.device,
+            allocator_key=allocator_key,
+            pin_mask=pin_mask,
+            sample_rate_hz=rate,
+            max_duration_s=max_duration_s,
+            meta=meta,
+        )
+        self._async_sessions[sniff_id] = session
+        reap_completed_sessions(self._async_sessions, self.device)
+        return {"sniff_id": sniff_id}
+
+    def i2c_status(self, sniff_id: str) -> dict[str, Any]:
+        reap_completed_sessions(self._async_sessions, self.device)
+        session = self._async_sessions.get(sniff_id)
+        if session is None:
+            raise ValueError(f"unknown sniff_id {sniff_id!r}")
+        rs = session.record_session
+        total = sum(len(c) for c in rs.chunks)
+        return {
+            "samples_received": total,
+            "lost_samples": rs.lost_samples,
+            "done": rs.done,
+        }
+
+    async def i2c_stop(self, sniff_id: str) -> dict[str, Any]:
+        session = self._async_sessions.pop(sniff_id, None)
+        if session is None:
+            raise ValueError(f"unknown sniff_id {sniff_id!r}")
+
+        artifact_path: str | None = None
+        artifact_error: str | None = None
+        count = 0
+        error_count = 0
+        try:
+            samples, lost_samples = await stop_observe_session(session, self.device)
+            meta = session.meta
+            try:
+                if samples.shape[0] > 0:
+                    decoder = I2cDecoder()
+                    txns = decoder.decode(
+                        samples,
+                        {
+                            "sda": _dio_index(meta["sda_pin"]),
+                            "scl": _dio_index(meta["scl_pin"]),
+                        },
+                        sample_rate_hz=meta["sample_rate_hz"],
+                    )
+                else:
+                    txns = []
+                records = [t.to_dict() for t in txns]
+                result = self.artifacts.write_parquet(
+                    "sniff_i2c",
+                    records,
+                    config={k: v for k, v in meta.items() if k != "sniff_id"},
+                    output_path=Path(meta["output_path"]) if meta.get("output_path") else None,
+                )
+                artifact_path = result.path
+                count = len(txns)
+                error_count = sum(1 for t in txns if t.error)
+            except Exception as exc:
+                log.exception("sniff.i2c_stop decode/write failed for %s", sniff_id)
+                artifact_error = str(exc)
+        finally:
+            self.device.allocator.release(session.allocator_key)
+
+        sidecar_path = artifact_path.replace(".parquet", ".json") if artifact_path else None
+        return {
+            "artifact_path": artifact_path,
+            "sidecar_path": sidecar_path,
+            "count": count,
+            "error_count": error_count,
+            "lost_samples": lost_samples,
+            "artifact_error": artifact_error,
+            "summary": {},
+        }
+
     def release(self) -> None:
         self.device.allocator.release("sniff_i2c")
         self.device.allocator.release("sniff_uart")
@@ -466,6 +604,20 @@ class Sniff(Instrument):
                             sniff_id, exc)
             self.device.allocator.release(session.allocator_key)
         self._spi_sessions.clear()
+
+        for sniff_id, session in list(self._async_sessions.items()):
+            r = session.record_session
+            if r.task is not None and not r.task.done():
+                r.task.cancel()
+            if r.notification_task is not None and not r.notification_task.done():
+                r.notification_task.cancel()
+            try:
+                self.device.backend.logic_record_stop()
+            except Exception as exc:
+                log.warning("logic_record_stop during sniff.release for %s failed: %s",
+                            sniff_id, exc)
+            self.device.allocator.release(session.allocator_key)
+        self._async_sessions.clear()
 
 
 def _close_i2c_transaction(
