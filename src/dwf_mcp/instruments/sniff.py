@@ -5,14 +5,17 @@ import asyncio
 import logging
 import time
 import uuid
-from contextlib import suppress
 from pathlib import Path
 from typing import Any, ClassVar
 
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument
-from dwf_mcp.streaming import RecordingSession, record_loop
+from dwf_mcp.instruments._async_sniff import (
+    _AsyncSniffSession,
+    start_observe_session,
+    stop_observe_session,
+)
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +110,7 @@ class Sniff(Instrument):
     def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
         self.device = device
         self.artifacts = artifacts
-        self._spi_sessions: dict[str, Any] = {}
+        self._spi_sessions: dict[str, _AsyncSniffSession] = {}
 
     # --- sniff.i2c ---
 
@@ -348,49 +351,24 @@ class Sniff(Instrument):
 
         sniff_id = str(uuid.uuid4())
         allocator_key = f"sniff_spi_{sniff_id}"
-        self.device.allocator.claim_observe(allocator_key)
-        try:
-            self.device.backend.logic_record_configure(
-                pin_mask=pin_mask,
-                sample_rate_hz=sample_rate_hz,
-                duration_s=3600.0,  # open-ended; spi_stop terminates capture
-            )
-            self.device.backend.logic_record_arm()
-        except Exception:
-            try:
-                self.device.backend.logic_record_stop()
-            except Exception as exc:
-                log.warning("logic_record_stop during spi_start cleanup failed: %s", exc)
-            self.device.allocator.release(allocator_key)
-            raise
-
-        session = RecordingSession(
-            record_id=sniff_id,
-            task=None,
-            notification_task=None,
-            queue=asyncio.Queue(maxsize=32),
-            chunks=[],
-            lost_samples=0,
-            done=False,
-            error=None,
-            meta={
-                "pins": pins,
-                "sample_rate_hz": sample_rate_hz,
-                "clk_pin": clk_pin,
-                "mosi_pin": mosi_pin,
-                "miso_pin": miso_pin,
-                "cs_pin": cs_pin,
-                "mode": mode,
-                "output_path": output_path,
-                "allocator_key": allocator_key,
-            },
-        )
-        session.task = asyncio.create_task(
-            record_loop(
-                session,
-                self.device.backend.logic_record_status,
-                self.device.backend.logic_record_read,
-            )
+        meta: dict[str, Any] = {
+            "sniff_id": sniff_id,
+            "pins": pins,
+            "sample_rate_hz": sample_rate_hz,
+            "clk_pin": clk_pin,
+            "mosi_pin": mosi_pin,
+            "miso_pin": miso_pin,
+            "cs_pin": cs_pin,
+            "mode": mode,
+            "output_path": output_path,
+        }
+        session = start_observe_session(
+            device=self.device,
+            allocator_key=allocator_key,
+            pin_mask=pin_mask,
+            sample_rate_hz=sample_rate_hz,
+            max_duration_s=3600.0,  # open-ended; spi_stop terminates capture
+            meta=meta,
         )
         self._spi_sessions[sniff_id] = session
         return {"sniff_id": sniff_id}
@@ -399,16 +377,15 @@ class Sniff(Instrument):
         session = self._spi_sessions.get(sniff_id)
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
-        total_samples = sum(len(c) for c in session.chunks)
+        r = session.record_session
+        total_samples = sum(len(c) for c in r.chunks)
         return {
             "samples_received": total_samples,
-            "lost_samples": session.lost_samples,
-            "done": session.done,
+            "lost_samples": r.lost_samples,
+            "done": r.done,
         }
 
     async def spi_stop(self, sniff_id: str) -> dict[str, Any]:
-        import numpy as np
-
         from dwf_mcp.instruments.decoder.spi import SpiDecoder
 
         session = self._spi_sessions.pop(sniff_id, None)
@@ -420,32 +397,12 @@ class Sniff(Instrument):
         count = 0
         error_count = 0
         try:
-            # 1. Cancel background task
-            if session.task is not None:
-                session.task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await session.task
+            # 1-3. Cancel background task, stop hardware, drain remaining samples.
+            all_samples, lost_samples = await stop_observe_session(session, self.device)
 
-            # 2. Stop hardware
-            try:
-                self.device.backend.logic_record_stop()
-            except Exception as exc:
-                log.warning("logic_record_stop in spi_stop failed: %s", exc)
-
-            # 3. Drain remaining samples
-            try:
-                available, lost, _ = self.device.backend.logic_record_status()
-                session.lost_samples += lost
-                if available > 0:
-                    chunk = self.device.backend.logic_record_read(available)
-                    session.chunks.append(chunk)
-            except Exception as exc:
-                log.warning("spi_stop drain failed: %s", exc)
-
-            # 4. Decode
-            if session.chunks:
+            # 4. Decode (SPI-specific).
+            if all_samples.shape[0] > 0:
                 try:
-                    all_samples = np.concatenate(session.chunks, axis=0)
                     meta = session.meta
                     pins = meta["pins"]
                     pin_map: dict[str, int] = {
@@ -468,7 +425,7 @@ class Sniff(Instrument):
                     records = [t.to_dict() for t in txns]
                     result = self.artifacts.write_parquet(
                         "sniff_spi", records,
-                        config={k: v for k, v in meta.items() if k != "allocator_key"},
+                        config={k: v for k, v in meta.items() if k != "sniff_id"},
                         output_path=meta.get("output_path"),
                     )
                     artifact_path = result.path
@@ -476,7 +433,7 @@ class Sniff(Instrument):
                     log.exception("spi_stop decode/write failed for sniff_id=%r", sniff_id)
                     artifact_error = str(exc)
         finally:
-            self.device.allocator.release(session.meta["allocator_key"])
+            self.device.allocator.release(session.allocator_key)
 
         sidecar_path = artifact_path.replace(".parquet", ".json") if artifact_path else None
         return {
@@ -484,7 +441,7 @@ class Sniff(Instrument):
             "sidecar_path": sidecar_path,
             "count": count,
             "error_count": error_count,
-            "lost_samples": session.lost_samples,
+            "lost_samples": lost_samples,
             "artifact_error": artifact_error,
             "summary": {},
         }
@@ -497,16 +454,17 @@ class Sniff(Instrument):
             # Cancel background record_loop / notification_loop tasks so they don't
             # keep polling the backend after release. cancel() is sync-safe; the
             # CancelledError is delivered to the task on its next await point.
-            if session.task is not None and not session.task.done():
-                session.task.cancel()
-            if session.notification_task is not None and not session.notification_task.done():
-                session.notification_task.cancel()
+            r = session.record_session
+            if r.task is not None and not r.task.done():
+                r.task.cancel()
+            if r.notification_task is not None and not r.notification_task.done():
+                r.notification_task.cancel()
             try:
                 self.device.backend.logic_record_stop()
             except Exception as exc:
                 log.warning("logic_record_stop during sniff.release for %s failed: %s",
                             sniff_id, exc)
-            self.device.allocator.release(f"sniff_spi_{sniff_id}")
+            self.device.allocator.release(session.allocator_key)
         self._spi_sessions.clear()
 
 
