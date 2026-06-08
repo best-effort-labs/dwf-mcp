@@ -124,6 +124,13 @@ class Sniff(Instrument):
         artifact_path: str | None = None
         artifact_error: str | None = None
         try:
+            self.device.backend.i2c_configure(
+                scl_pin_idx=_dio_index(scl_pin),
+                sda_pin_idx=_dio_index(sda_pin),
+                rate_hz=clock_hz,
+                stretch=False,
+                timeout_s=0.0,
+            )
             self.device.backend.i2c_spy_start()
             start_time = time.monotonic()
             deadline = start_time + duration_s
@@ -425,13 +432,13 @@ class Sniff(Instrument):
                     meta = session.meta
                     pins = meta["pins"]
                     pin_map: dict[str, int] = {
-                        "clk":  pins.index(meta["clk_pin"]),
-                        "mosi": pins.index(meta["mosi_pin"]),
+                        "clk":  int(meta["clk_pin"][3:]),
+                        "mosi": int(meta["mosi_pin"][3:]),
                     }
                     if meta["miso_pin"] and meta["miso_pin"] in pins:
-                        pin_map["miso"] = pins.index(meta["miso_pin"])
+                        pin_map["miso"] = int(meta["miso_pin"][3:])
                     if meta["cs_pin"] and meta["cs_pin"] in pins:
-                        pin_map["cs"] = pins.index(meta["cs_pin"])
+                        pin_map["cs"] = int(meta["cs_pin"][3:])
 
                     decoder = SpiDecoder()
                     txns = decoder.decode(

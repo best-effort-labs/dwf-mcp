@@ -175,6 +175,43 @@ def test_spi_stop_decodes_and_writes_parquet(sniff: Sniff) -> None:
     assert result["count"] >= 2
 
 
+def test_spi_stop_pin_map_uses_dio_number_not_list_index(sniff: Sniff) -> None:
+    """Regression: pin_map must use the DIO number (e.g. 4) not the list index (e.g. 0).
+
+    Use non-zero-based pins dio4/dio5/dio6/dio7 so that list-index (0,1,2,3) and
+    DIO number (4,5,6,7) differ.  The sample array is built with signals in columns
+    4,5,6,7 to match the expected DIO numbers.
+    """
+    # Build base samples with signals in columns 0,1,2,3 (16 columns wide)
+    base_samples, _ = _spi_samples([0xA5, 0x5A])  # shape (N, 16)
+
+    # Shift signals from columns 0-3 → 4-7 by rearranging columns
+    shifted = np.zeros_like(base_samples)
+    shifted[:, 4] = base_samples[:, 0]  # CLK   → col 4 (dio4)
+    shifted[:, 5] = base_samples[:, 1]  # MOSI  → col 5 (dio5)
+    shifted[:, 6] = base_samples[:, 2]  # MISO  → col 6 (dio6)
+    shifted[:, 7] = base_samples[:, 3]  # CS    → col 7 (dio7)
+
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake._logic_record_canned_chunk = shifted
+    fake.set_logic_record_status_sequence([(len(shifted), 0, 1), (0, 0, 0)])
+
+    async def run() -> dict:
+        start = await sniff.spi_start(
+            clk_pin="dio4", mosi_pin="dio5", miso_pin="dio6", cs_pin="dio7",
+            mode=0, freq_hz=100_000,
+        )
+        await asyncio.sleep(0.05)
+        return await sniff.spi_stop(start["sniff_id"])
+
+    result = asyncio.run(run())
+    assert result["artifact_error"] is None, f"decode error: {result['artifact_error']}"
+    assert result["artifact_path"] is not None
+    assert result["count"] >= 2, (
+        "Expected ≥2 decoded words; wrong pin_map (list-index vs DIO number) would produce 0"
+    )
+
+
 def test_spi_stop_releases_observer_claim(sniff: Sniff) -> None:
     fake: FakeBackend = sniff.device.backend  # type: ignore
     fake.set_logic_record_status_sequence([(0, 0, 0)])

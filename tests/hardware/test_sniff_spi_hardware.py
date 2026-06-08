@@ -58,7 +58,6 @@ async def test_sniff_spi_captures_active_transfer(app, tmp_path: Path) -> None:
     assert xfer["sent"] == [0xA5, 0x5A]
 
     result = await app.call_tool("sniff.spi_stop", {"sniff_id": sniff_id})
-    await app.call_tool("spi.release", {})
 
     assert result["artifact_error"] is None, f"artifact_error: {result['artifact_error']}"
     assert result["artifact_path"] is not None
@@ -89,7 +88,6 @@ async def test_sniff_spi_lost_samples_zero(app, tmp_path: Path) -> None:
     })
     await app.call_tool("spi.transfer", {"data": [0xFF, 0x00, 0xAA, 0x55]})
     result = await app.call_tool("sniff.spi_stop", {"sniff_id": start["sniff_id"]})
-    await app.call_tool("spi.release", {})
 
     assert result["lost_samples"] == 0, f"lost_samples={result['lost_samples']}"
     assert result["count"] >= 4
