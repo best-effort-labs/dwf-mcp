@@ -321,14 +321,14 @@ class PydwfBackend(DwfBackend):
         return int(self._i2c.writeOne(address << 1, byte))
 
     def i2c_spy_start(self) -> None:
-        self._device.protocol.i2c.spyStart()
+        self._i2c.spyStart()
 
     def i2c_spy_status(self, max_data_size: int) -> tuple[int, int, list[int], int]:
-        start, stop, data, nak = self._device.protocol.i2c.spyStatus(max_data_size)
+        start, stop, data, nak = self._i2c.spyStatus(max_data_size)
         return int(start), int(stop), [int(b) for b in data], int(nak)
 
     def i2c_spy_stop(self) -> None:
-        self._device.protocol.i2c.reset()
+        self._i2c.reset()
 
     # --- AWG (AnalogOut) ----------------------------------------------------
 
@@ -689,7 +689,7 @@ class PydwfBackend(DwfBackend):
         poll_interval_s: float,
     ) -> list[tuple[float, bytes, bool]]:
         import time
-        uart = self._device.protocol.uart
+        uart = self._uart
         uart.reset()
         uart.rateSet(baud)
         uart.bitsSet(data_bits)
@@ -699,6 +699,7 @@ class PydwfBackend(DwfBackend):
         uart.rxSet(rx_pin_idx)
         uart.rx(0)
         uart.rx(1)
+        time.sleep(0.010)   # firmware needs ~10ms to start buffering after rx(1)
         try:
             frames: list[tuple[float, bytes, bool]] = []
             start_t = time.monotonic()
@@ -754,10 +755,12 @@ class PydwfBackend(DwfBackend):
         poll_interval_s: float,
     ) -> list[tuple[float, int, bytes, bool, int]]:
         import time
-        can = self._device.protocol.can
+        can = self._can
         can.reset()
         can.rateSet(bitrate)
         can.rxSet(rx_pin_idx)
+        can.rx()             # prime buffer
+        time.sleep(0.010)    # let TX line settle to CAN idle before loop begins
         try:
             frames: list[tuple[float, int, bytes, bool, int]] = []
             start_t = time.monotonic()
