@@ -9,6 +9,21 @@ from dwf_mcp.instruments.decoder.base import Decoder, I2cTransaction
 
 
 class I2cDecoder(Decoder):
+    """Software I2C decoder for raw DigitalIn captures.
+
+    Handles standard 7-bit addressing, START/STOP framing, and per-byte
+    ACK/NAK sampling. The decoder samples SDA on each SCL rising edge,
+    accumulates 8 data bits, then samples the 9th bit as ACK (0) or NAK (1).
+
+    Limitations:
+        - 10-bit addressing is not supported (Stage 5 out-of-scope).
+        - Repeated START is not handled — combined transactions (write
+          register, repeated START, read data) emit only the second half.
+          Capture each transaction segment separately if you need both.
+        - Clock stretching is not explicitly modelled but is tolerated since
+          decoding is edge-driven rather than timing-driven.
+    """
+
     protocol_name: ClassVar[str] = "i2c"
 
     def decode(  # type: ignore[override]
@@ -18,6 +33,10 @@ class I2cDecoder(Decoder):
         sample_rate_hz: float,
         **_unused: Any,
     ) -> list[I2cTransaction]:
+        if sample_rate_hz <= 0:
+            raise ValueError(
+                f"sample_rate_hz must be positive, got {sample_rate_hz}"
+            )
         sda = samples[:, pin_map["sda"]].astype(np.int8)
         scl = samples[:, pin_map["scl"]].astype(np.int8)
         # Prepend first sample so diff has same length and edges at i index
@@ -95,6 +114,30 @@ def _finalize_i2c(
         )
     address = addr_byte >> 1
     direction = "read" if (addr_byte & 1) else "write"
+
+    # On a read transaction, the master NAKs the final byte to signal
+    # "no more bytes". That terminal NAK is normal protocol, not an error.
+    # A NAK at any earlier byte position on a read means the slave aborted
+    # mid-read, which IS an error. On writes, any NAK is an error.
+    is_terminal_read_nak = (
+        direction == "read"
+        and nak_idx is not None
+        and nak_idx >= 1
+        and nak_idx - 1 == len(data_bytes) - 1
+    )
+
+    if is_terminal_read_nak:
+        return I2cTransaction(
+            timestamp_s=timestamp_s,
+            type=direction,
+            address=address,
+            address_bits=7,
+            data=bytes(data_bytes),
+            nak_at_byte=nak_idx,
+            error=False,
+            error_detail=None,
+        )
+
     return I2cTransaction(
         timestamp_s=timestamp_s,
         type=direction,
