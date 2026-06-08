@@ -79,7 +79,7 @@ class FakeBackend(DwfBackend):
         self._i2c_spy_idx: int = 0
         self._uart_sniff_frames: list[tuple[float, bytes, bool]] = []
         self._can_sniff_frames: list[tuple[float, int, bytes, bool, int]] = []
-        self.sniff_calls: list[tuple[str, dict]] = []
+        self.sniff_calls: list[tuple[str, dict[str, Any]]] = []
 
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
