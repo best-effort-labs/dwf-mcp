@@ -49,6 +49,8 @@ def open_device(app):
 
 
 @pytest.mark.jumperless(connections={
+    # AD3_GND must share reference with Jumperless GND for digital signals to decode
+    "gnd_bridge": ("AD3_GND", "GND"),
     # RP2350B I2C master pins → AD3 sniff pins
     "rp_sda_to_ad3": ("GPIO_1", "DIO0"),
     "rp_scl_to_ad3": ("GPIO_2", "DIO1"),

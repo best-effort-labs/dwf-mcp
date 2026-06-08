@@ -43,11 +43,14 @@ def open_device(app):
 
 
 @pytest.mark.jumperless(connections={
-    # RP2350B UART_TX (GP0) → AD3 DIO0 (sniff RX)
-    "rp_tx_to_ad3": ("UART_TX", "DIO0"),
+    # AD3_GND must share reference with Jumperless GND for digital signals to decode
+    "gnd_bridge": ("AD3_GND", "GND"),
+    # RP2350B UART1 TX on GP20 (GPIO_1 routable node) → AD3 DIO0 (sniff RX)
+    # Note: UART0/GP0 is reserved by Jumperless firmware; use UART1/GP20 instead.
+    "rp_tx_to_ad3": ("GPIO_1", "DIO0"),
 })
 def test_sniff_uart_rp2350b_stimulus(app, jumperless, tmp_path: Path) -> None:
-    """RP2350B sends 3 known bytes; sniff.uart captures them on DIO0."""
+    """RP2350B sends 3 known bytes via UART1/GP20; sniff.uart captures them on DIO0."""
     if jumperless is None:
         pytest.skip("Jumperless not available")
 
@@ -69,7 +72,7 @@ def test_sniff_uart_rp2350b_stimulus(app, jumperless, tmp_path: Path) -> None:
 
     jumperless.exec("""
 from machine import UART, Pin
-u = UART(0, baudrate=9600, tx=Pin(0))
+u = UART(1, baudrate=9600, tx=Pin(20), rx=Pin(21))
 u.write(b'\\x41\\x42\\x43')
 """)
 
@@ -90,7 +93,8 @@ u.write(b'\\x41\\x42\\x43')
 
 
 @pytest.mark.jumperless(connections={
-    "rp_tx_to_ad3": ("UART_TX", "DIO0"),
+    "gnd_bridge": ("AD3_GND", "GND"),
+    "rp_tx_to_ad3": ("GPIO_1", "DIO0"),
 })
 def test_sniff_uart_parity_errors_absent(app, jumperless, tmp_path: Path) -> None:
     """Verify clean 8N1 transmission at 115200 produces no parity errors."""
@@ -112,7 +116,7 @@ def test_sniff_uart_parity_errors_absent(app, jumperless, tmp_path: Path) -> Non
 
     jumperless.exec("""
 from machine import UART, Pin
-u = UART(0, baudrate=115200, tx=Pin(0))
+u = UART(1, baudrate=115200, tx=Pin(20), rx=Pin(21))
 u.write(b'Hello World')
 """)
 
