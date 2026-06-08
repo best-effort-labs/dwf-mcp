@@ -400,7 +400,11 @@ class Sniff(Instrument):
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
         total_samples = sum(len(c) for c in session.chunks)
-        return {"samples_received": total_samples, "lost_samples": session.lost_samples}
+        return {
+            "samples_received": total_samples,
+            "lost_samples": session.lost_samples,
+            "done": session.done,
+        }
 
     async def spi_stop(self, sniff_id: str) -> dict[str, Any]:
         import numpy as np

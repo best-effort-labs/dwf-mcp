@@ -216,6 +216,29 @@ def test_spi_status_reports_samples(sniff: Sniff) -> None:
     assert "lost_samples" in status
 
 
+def test_spi_status_reports_done(sniff: Sniff) -> None:
+    """spi_status returns done=True when the record_loop has finished."""
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    samples, _ = _spi_samples([0xA5])
+    fake._logic_record_canned_chunk = samples
+    # remaining=0 → record_loop sets session.done = True
+    fake.set_logic_record_status_sequence([(len(samples), 0, 0)])
+
+    async def run() -> dict:
+        start = await sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000,
+        )
+        await asyncio.sleep(0.05)  # let record_loop poll once
+        status = sniff.spi_status(start["sniff_id"])
+        await sniff.spi_stop(start["sniff_id"])
+        return status
+
+    status = asyncio.run(run())
+    assert status["done"] is True
+    assert "samples_received" in status
+    assert "lost_samples" in status
+
+
 def test_spi_stop_decodes_and_writes_parquet(sniff: Sniff) -> None:
     samples, _ = _spi_samples([0xA5, 0x5A])
     fake: FakeBackend = sniff.device.backend  # type: ignore
