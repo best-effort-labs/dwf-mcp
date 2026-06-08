@@ -81,6 +81,8 @@ class ArtifactWriter:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Empty table has no column schema; callers should not attempt to
+        # concatenate empty and non-empty parquet files from the same instrument.
         table = pa.Table.from_pylist(records) if records else pa.table({})
         pq.write_table(table, output_path)
 

@@ -77,6 +77,11 @@ def test_write_parquet_creates_files(tmp_path: Path) -> None:
     assert result.path.endswith(".parquet")
     assert Path(result.sidecar_path).exists()
     assert result.summary["count"] == 2
+    # Validate sidecar JSON structure
+    sidecar = json.loads(Path(result.sidecar_path).read_text())
+    assert sidecar["instrument"] == "sniff_uart"
+    assert sidecar["config"] == {"baud": 9600}
+    assert sidecar["summary"]["count"] == 2
 
 
 def test_write_parquet_empty(tmp_path: Path) -> None:
