@@ -31,6 +31,30 @@ class SpiTransaction:
         }
 
 
+@dataclass
+class I2cTransaction:
+    timestamp_s: float
+    type: str                # "read" or "write"
+    address: int             # 7-bit address (or 10-bit when address_bits == 10)
+    address_bits: int        # 7 or 10
+    data: bytes              # payload bytes following the address byte(s)
+    nak_at_byte: int | None  # None if all ACKed; 0 == NAK on address byte
+    error: bool = False
+    error_detail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timestamp_s": self.timestamp_s,
+            "type": self.type,
+            "address": self.address,
+            "address_bits": self.address_bits,
+            "data": self.data,
+            "nak_at_byte": self.nak_at_byte,
+            "error": self.error,
+            "error_detail": self.error_detail,
+        }
+
+
 class Decoder(ABC):
     protocol_name: ClassVar[str]
 
