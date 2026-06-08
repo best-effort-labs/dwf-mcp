@@ -119,3 +119,34 @@ def test_clear_removes_observe_claims() -> None:
     alloc.claim_observe("sniff_spi")
     alloc.clear()
     assert len(alloc._observe_claims) == 0
+
+
+# --- Stage 5 coexistence invariants ---
+
+def test_observe_coexists_with_engine_and_dio_claim() -> None:
+    """The KEY Stage 5 invariant: an observer (e.g. sniff.i2c_start) MUST NOT
+    block a concurrent protocol master (i2c.configure + i2c.scan) on the
+    same wires. claim_observe and claim share no resources."""
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_i2c_X")
+    # This MUST succeed — no PinAllocationError.
+    alloc.claim("i2c_master", ["i2c_engine", "dio0", "dio1"])
+    assert "i2c_master" in alloc.claimed_instruments()
+
+
+def test_two_observers_conflict() -> None:
+    """Only one observer at a time. Stage 5 sniff.{i2c,uart,can,spi}_start tools
+    each claim_observe — they can't coexist."""
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_spi_X")
+    with pytest.raises(PinAllocationError):
+        alloc.claim_observe("sniff_i2c_Y")
+
+
+def test_exclusive_digital_in_blocked_while_observer_active() -> None:
+    """An observer holds DigitalIn read-only. An exclusive DigitalIn claim
+    (e.g. logic.record_start) must wait."""
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_i2c_X")
+    with pytest.raises(PinAllocationError):
+        alloc.claim("logic", ["digital_in"])
