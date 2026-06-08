@@ -375,3 +375,47 @@ def test_sniff_i2c_status_reports_done(sniff: Sniff) -> None:
 
     status = asyncio.run(run())
     assert status["done"] is True
+
+
+# --- sniff.uart_start / uart_status / uart_stop (async observe-mode) ---
+
+
+def test_sniff_uart_start_returns_id(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 1)])
+
+    async def run() -> dict:
+        r = await sniff.uart_start(rx_pin="dio0", baud=9600, max_duration_s=0.1)
+        await sniff.uart_stop(r["sniff_id"])
+        return r
+
+    result = asyncio.run(run())
+    assert "sniff_id" in result
+    assert isinstance(result["sniff_id"], str)
+
+
+def test_sniff_uart_memory_cap_raises(sniff: Sniff) -> None:
+    with pytest.raises(ValueError, match="32 MB"):
+        asyncio.run(sniff.uart_start(
+            rx_pin="dio0", baud=9600, max_duration_s=3600, sample_rate_hz=100e6,
+        ))
+
+
+def test_sniff_uart_oversampling_rejected(sniff: Sniff) -> None:
+    with pytest.raises(ValueError, match="oversampling"):
+        asyncio.run(sniff.uart_start(
+            rx_pin="dio0", baud=9600, max_duration_s=0.1, sample_rate_hz=20_000,  # 2.08x
+        ))
+
+
+def test_sniff_uart_does_not_claim_uart_engine_or_dio(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 1)])
+
+    async def run() -> None:
+        r = await sniff.uart_start(rx_pin="dio0", baud=9600, max_duration_s=0.1)
+        # Other instruments can claim uart_engine + dio0 while sniff observes.
+        sniff.device.allocator.claim("uart_master", ["uart_engine", "dio0"])
+        await sniff.uart_stop(r["sniff_id"])
+
+    asyncio.run(run())
