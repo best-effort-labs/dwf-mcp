@@ -64,3 +64,33 @@ def test_default_workspace_is_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     (tmp_path / "fake-temp").mkdir()
     writer = ArtifactWriter()
     assert Path(writer.workspace).name == "fake-temp"
+
+
+def test_write_parquet_creates_files(tmp_path: Path) -> None:
+    writer = ArtifactWriter(workspace=tmp_path)
+    records = [
+        {"timestamp_s": 0.0, "error": False, "error_detail": None, "data": b"\xA5"},
+        {"timestamp_s": 0.001, "error": True, "error_detail": "parity", "data": b"\x00"},
+    ]
+    result = writer.write_parquet("sniff_uart", records, config={"baud": 9600})
+    assert Path(result.path).exists()
+    assert result.path.endswith(".parquet")
+    assert Path(result.sidecar_path).exists()
+    assert result.summary["count"] == 2
+
+
+def test_write_parquet_empty(tmp_path: Path) -> None:
+    writer = ArtifactWriter(workspace=tmp_path)
+    result = writer.write_parquet("sniff_can", [], config={})
+    assert Path(result.path).exists()
+    assert result.summary["count"] == 0
+
+
+def test_write_parquet_roundtrip(tmp_path: Path) -> None:
+    import pyarrow.parquet as pq
+    writer = ArtifactWriter(workspace=tmp_path)
+    records = [{"timestamp_s": 1.5, "frame_id": 0x123, "data": b"\x01\x02"}]
+    result = writer.write_parquet("sniff_can", records, config={})
+    table = pq.read_table(result.path)
+    assert table.num_rows == 1
+    assert table.column("frame_id")[0].as_py() == 0x123
