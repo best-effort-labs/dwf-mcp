@@ -120,6 +120,26 @@ def test_decode_parity_even_wrong_flags_error() -> None:
     assert frames[0].error is True
 
 
+def test_uart_frame_row_shape_matches_engine_mode_sniff() -> None:
+    """The UartFrame parquet row schema MUST match what sniff.uart writes.
+    Spec guarantees observe-mode and engine-mode artifacts are indistinguishable."""
+    samples = _uart_samples(b"A", baud=9600, sample_rate_hz=96000.0)
+    decoder = UartDecoder()
+    frames = decoder.decode(
+        samples, {"rx": 0}, sample_rate_hz=96000.0,
+        baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0,
+    )
+    assert len(frames) >= 1
+    row = frames[0].to_dict()
+    expected_keys = {
+        "timestamp_s", "data",
+        "parity_error", "framing_error", "break_condition",
+        "error", "error_detail",
+    }
+    assert expected_keys.issubset(row.keys()), \
+        f"missing keys: {expected_keys - row.keys()}"
+
+
 def test_decode_framing_error_when_stop_bit_low() -> None:
     """Hand-build a frame whose stop bit is LOW (line broken) → framing_error=True."""
     samples_per_bit = 10

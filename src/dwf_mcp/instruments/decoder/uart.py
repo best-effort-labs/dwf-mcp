@@ -133,6 +133,7 @@ class UartDecoder(Decoder):
                 data=bytes([byte]),
                 parity_error=par_err,
                 framing_error=fram_err,
+                break_condition=None,
                 error=par_err or fram_err,
                 error_detail=error_detail,
             ))

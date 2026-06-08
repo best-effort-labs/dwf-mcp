@@ -412,6 +412,9 @@ class Sniff(Instrument):
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
     ) -> dict[str, Any]:
+        # TODO(stage5+): sniff.spi_start predates the memory cap + reaping discipline of
+        # sniff.{i2c,uart,can}_start. Consider migrating to _async_sessions and the
+        # check_memory_cap path so SPI sessions are bounded and reapable.
         sample_rate_hz = freq_hz * 10  # 10× oversampling
         pins = [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None]
         pin_mask = sum(1 << int(p[3:]) for p in pins)
@@ -577,6 +580,7 @@ class Sniff(Instrument):
         artifact_error: str | None = None
         count = 0
         error_count = 0
+        txns: list[Any] = []
         try:
             samples, lost_samples = await stop_observe_session(session, self.device)
             meta = session.meta
@@ -591,9 +595,11 @@ class Sniff(Instrument):
                         },
                         sample_rate_hz=meta["sample_rate_hz"],
                     )
-                else:
-                    txns = []
                 records = [t.to_dict() for t in txns]
+                # Assign count/error_count BEFORE write so a parquet failure
+                # (disk full, etc.) doesn't zero out a successful decode.
+                count = len(txns)
+                error_count = sum(1 for t in txns if t.error)
                 result = self.artifacts.write_parquet(
                     "sniff_i2c",
                     records,
@@ -601,8 +607,6 @@ class Sniff(Instrument):
                     output_path=Path(meta["output_path"]) if meta.get("output_path") else None,
                 )
                 artifact_path = result.path
-                count = len(txns)
-                error_count = sum(1 for t in txns if t.error)
             except Exception as exc:
                 log.exception("sniff.i2c_stop decode/write failed for %s", sniff_id)
                 artifact_error = str(exc)
@@ -610,6 +614,10 @@ class Sniff(Instrument):
             self.device.allocator.release(session.allocator_key)
 
         sidecar_path = artifact_path.replace(".parquet", ".json") if artifact_path else None
+        # Match engine-mode sniff.i2c's summary shape: first_n summaries of
+        # decoded transactions. _summarise_i2c expects a dict, so feed it
+        # the dataclass's to_dict().
+        first_n = [_summarise_i2c(t.to_dict()) for t in txns[:5]]
         return {
             "artifact_path": artifact_path,
             "sidecar_path": sidecar_path,
@@ -617,7 +625,7 @@ class Sniff(Instrument):
             "error_count": error_count,
             "lost_samples": lost_samples,
             "artifact_error": artifact_error,
-            "summary": {},
+            "summary": {"first_n": first_n},
         }
 
     # --- sniff.uart_start / uart_status / uart_stop (async observe-mode) ---
@@ -709,6 +717,10 @@ class Sniff(Instrument):
                 else:
                     frames = []
                 records = [f.to_dict() for f in frames]
+                # Assign count/error_count BEFORE write so a parquet failure
+                # (disk full, etc.) doesn't zero out a successful decode.
+                count = len(frames)
+                error_count = sum(1 for f in frames if f.error)
                 result = self.artifacts.write_parquet(
                     "sniff_uart",
                     records,
@@ -716,8 +728,6 @@ class Sniff(Instrument):
                     output_path=Path(meta["output_path"]) if meta.get("output_path") else None,
                 )
                 artifact_path = result.path
-                count = len(frames)
-                error_count = sum(1 for f in frames if f.error)
             except Exception as exc:
                 log.exception("sniff.uart_stop decode/write failed for %s", sniff_id)
                 artifact_error = str(exc)
@@ -814,6 +824,10 @@ class Sniff(Instrument):
                 else:
                     frames = []
                 records = [f.to_dict() for f in frames]
+                # Assign count/error_count BEFORE write so a parquet failure
+                # (disk full, etc.) doesn't zero out a successful decode.
+                count = len(frames)
+                error_count = sum(1 for f in frames if f.error)
                 result = self.artifacts.write_parquet(
                     "sniff_can",
                     records,
@@ -821,8 +835,6 @@ class Sniff(Instrument):
                     output_path=Path(meta["output_path"]) if meta.get("output_path") else None,
                 )
                 artifact_path = result.path
-                count = len(frames)
-                error_count = sum(1 for f in frames if f.error)
             except Exception as exc:
                 log.exception("sniff.can_stop decode/write failed for %s", sniff_id)
                 artifact_error = str(exc)

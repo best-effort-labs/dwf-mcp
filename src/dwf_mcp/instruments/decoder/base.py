@@ -37,6 +37,10 @@ class UartFrame:
     data: bytes              # decoded byte (one byte per frame)
     parity_error: bool
     framing_error: bool
+    # Break-condition detection (sustained start-level for longer than one
+    # frame time) is not performed by UartDecoder; this field defaults to
+    # None so the parquet row shape matches engine-mode sniff.uart records.
+    break_condition: bool | None = None
     error: bool = False
     error_detail: str | None = None
 
@@ -46,6 +50,7 @@ class UartFrame:
             "data": self.data,
             "parity_error": self.parity_error,
             "framing_error": self.framing_error,
+            "break_condition": self.break_condition,
             "error": self.error,
             "error_detail": self.error_detail,
         }
