@@ -274,8 +274,13 @@ class DwfBackend(ABC):
         stop_bits: int,
         duration_s: float,
         poll_interval_s: float,
+        polarity: int,
     ) -> list[tuple[float, bytes, bool]]:
-        """Returns list of (timestamp_s, data, parity_error)."""
+        """Returns list of (timestamp_s, data, parity_error).
+
+        polarity: passed to pydwf protocol.uart.polaritySet. Empirically 0 matches
+        standard TTL UART (idle HIGH, start LOW); 1 is the inverted convention.
+        """
         raise NotImplementedError
 
     def can_sniff(

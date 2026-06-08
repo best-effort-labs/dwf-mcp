@@ -687,6 +687,7 @@ class PydwfBackend(DwfBackend):
         stop_bits: int,
         duration_s: float,
         poll_interval_s: float,
+        polarity: int,
     ) -> list[tuple[float, bytes, bool]]:
         import time
         uart = self._uart
@@ -696,6 +697,7 @@ class PydwfBackend(DwfBackend):
         parity_map = {"none": 0, "odd": 1, "even": 2}
         uart.paritySet(parity_map[parity])
         uart.stopSet(stop_bits)
+        uart.polaritySet(polarity)
         uart.rxSet(rx_pin_idx)
         uart.rx(0)
         uart.rx(1)

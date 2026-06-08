@@ -46,6 +46,8 @@ SNIFF_UART_SCHEMA: dict[str, Any] = {
         "data_bits": {"type": "integer", "enum": [5, 6, 7, 8], "default": 8},
         "parity": {"type": "string", "enum": ["none", "odd", "even"], "default": "none"},
         "stop_bits": {"type": "integer", "enum": [1, 2], "default": 1},
+        "polarity": {"type": "integer", "enum": [0, 1], "default": 0,
+                     "description": "pydwf protocol.uart.polaritySet value; 0 = standard TTL (idle HIGH); 1 = inverted"},
         "poll_interval_s": {"type": "number", "default": 0.010},
         "output_path": {"type": "string"},
     },
@@ -199,6 +201,7 @@ class Sniff(Instrument):
         data_bits: int = 8,
         parity: str = "none",
         stop_bits: int = 1,
+        polarity: int = 0,
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
     ) -> dict[str, Any]:
@@ -216,6 +219,7 @@ class Sniff(Instrument):
                 stop_bits=stop_bits,
                 duration_s=duration_s,
                 poll_interval_s=poll_interval_s,
+                polarity=polarity,
             )
             error_count = sum(1 for _, _, pe in raw_frames if pe)
             records = [
@@ -235,7 +239,7 @@ class Sniff(Instrument):
                     "sniff_uart", records,
                     config={
                         "rx_pin": rx_pin, "baud": baud, "data_bits": data_bits,
-                        "parity": parity, "stop_bits": stop_bits,
+                        "parity": parity, "stop_bits": stop_bits, "polarity": polarity,
                         "duration_s": duration_s, "poll_interval_s": poll_interval_s,
                     },
                     output_path=Path(output_path) if output_path else None,

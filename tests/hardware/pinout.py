@@ -60,17 +60,23 @@ _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     "ADC3":         "ADC3",
     "ADC4":         "ADC4",
     # RP2350B routable GPIO / UART — pass through as string node aliases
-    "UART_TX":      "UART_TX",   # RP2350B GP0, machine.UART(0, tx=Pin(0))
-    "UART_RX":      "UART_RX",   # RP2350B GP1, machine.UART(0, rx=Pin(1))
-    "GPIO_1":       "GPIO_1",    # RP2350B GP20, machine.I2C(0, sda=Pin(20), ...)
-    "GPIO_2":       "GPIO_2",    # RP2350B GP21, machine.I2C(0, scl=Pin(21), ...)
-    "GPIO_3":       "GPIO_3",    # RP2350B GP22
-    "GPIO_4":       "GPIO_4",    # RP2350B GP23
+    # UART_TX/UART_RX are wired by the Jumperless firmware to UART(0)'s default
+    # MicroPython pins. Use `machine.UART(0, baudrate)` with NO Pin() override
+    # (see scripts/ex/uart_loopback.py in JumperlOS).
+    "UART_TX":      "UART_TX",
+    "UART_RX":      "UART_RX",
+    # GPIO_1..GPIO_8 route to physical RP2350B GP20..GP27 (see JumperlOS docs).
+    "GPIO_1":       "GPIO_1",    # GP20
+    "GPIO_2":       "GPIO_2",    # GP21
+    "GPIO_3":       "GPIO_3",    # GP22
+    "GPIO_4":       "GPIO_4",    # GP23
     # Pre-placed I2C pull-up resistors — direct row numbers (vertical, bridging gap)
+    # 10kΩ resistors. SCL uses rows 30/60; SDA uses rows 28/58.
+    # (Row 29/59 has a 100Ω resistor, unused — too low for I2C pull-up.)
     "I2C_SDA_R_A":  28,
     "I2C_SDA_R_B":  58,
-    "I2C_SCL_R_A":  29,
-    "I2C_SCL_R_B":  59,
+    "I2C_SCL_R_A":  30,
+    "I2C_SCL_R_B":  60,
 }
 
 

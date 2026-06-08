@@ -453,9 +453,9 @@ class FakeBackend(DwfBackend):
 
     def uart_sniff(
         self, rx_pin_idx: int, baud: int, data_bits: int, parity: str, stop_bits: int,
-        duration_s: float, poll_interval_s: float,
+        duration_s: float, poll_interval_s: float, polarity: int,
     ) -> list[tuple[float, bytes, bool]]:
-        self.sniff_calls.append(("uart_sniff", {"baud": baud}))
+        self.sniff_calls.append(("uart_sniff", {"baud": baud, "polarity": polarity}))
         return list(self._uart_sniff_frames)
 
     def can_sniff(
