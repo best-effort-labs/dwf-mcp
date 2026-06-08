@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from contextlib import suppress
+from pathlib import Path
 from typing import Any, ClassVar
 
 from dwf_mcp.artifacts import ArtifactWriter
@@ -160,7 +161,7 @@ class Sniff(Instrument):
                         "clock_hz": clock_hz, "duration_s": duration_s,
                         "poll_interval_s": poll_interval_s,
                     },
-                    output_path=output_path,
+                    output_path=Path(output_path) if output_path else None,
                 )
                 artifact_path = result.path
             except Exception as exc:
@@ -230,7 +231,7 @@ class Sniff(Instrument):
                         "parity": parity, "stop_bits": stop_bits,
                         "duration_s": duration_s, "poll_interval_s": poll_interval_s,
                     },
-                    output_path=output_path,
+                    output_path=Path(output_path) if output_path else None,
                 )
                 artifact_path = result.path
             except Exception as exc:
@@ -293,7 +294,7 @@ class Sniff(Instrument):
                 result = self.artifacts.write_parquet(
                     "sniff_can", records,
                     config={"rx_pin": rx_pin, "bitrate": bitrate, "duration_s": duration_s},
-                    output_path=output_path,
+                    output_path=Path(output_path) if output_path else None,
                 )
                 artifact_path = result.path
             except Exception as exc:
@@ -385,6 +386,7 @@ class Sniff(Instrument):
 
     async def spi_stop(self, sniff_id: str) -> dict[str, Any]:
         import numpy as np
+
         from dwf_mcp.instruments.decoder.spi import SpiDecoder
 
         session = self._spi_sessions.pop(sniff_id, None)

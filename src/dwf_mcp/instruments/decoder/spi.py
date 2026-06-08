@@ -22,7 +22,7 @@ _SAMPLE_ON_RISING: dict[tuple[int, int], bool] = {
 class SpiDecoder(Decoder):
     protocol_name: ClassVar[str] = "spi"
 
-    def decode(
+    def decode(  # type: ignore[override]
         self,
         samples: np.ndarray,
         pin_map: dict[str, int],

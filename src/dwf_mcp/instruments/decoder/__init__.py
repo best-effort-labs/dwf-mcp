@@ -117,7 +117,7 @@ class Decoder(Instrument):
                     "mode": mode, "bit_order": bit_order, "word_size": word_size,
                     "sample_rate_hz": sample_rate_hz,
                 },
-                output_path=output_path,
+                output_path=Path(output_path) if output_path else None,
             )
             artifact_path = result.path
         except Exception as exc:
