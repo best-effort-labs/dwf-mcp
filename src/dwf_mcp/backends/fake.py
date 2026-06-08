@@ -74,6 +74,12 @@ class FakeBackend(DwfBackend):
         # CAN (ProtocolCAN) state
         self.can_calls: list[tuple[str, dict[str, Any]]] = []
         self._can_canned_frame: tuple[int | None, bytes, bool, int] = (None, b"", False, 0)
+        # Sniff state
+        self._i2c_spy_sequence: list[tuple[int, int, list[int], int]] = []
+        self._i2c_spy_idx: int = 0
+        self._uart_sniff_frames: list[tuple[float, bytes, bool]] = []
+        self._can_sniff_frames: list[tuple[float, int, bytes, bool, int]] = []
+        self.sniff_calls: list[tuple[str, dict]] = []
 
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
@@ -427,6 +433,47 @@ class FakeBackend(DwfBackend):
         self, id: int | None, data: bytes, extended: bool, error_count: int
     ) -> None:
         self._can_canned_frame = (id, data, extended, error_count)
+
+    # --- Sniff (stage 4) ---
+
+    def i2c_spy_start(self) -> None:
+        self.sniff_calls.append(("i2c_spy_start", {}))
+        self._i2c_spy_idx = 0
+
+    def i2c_spy_status(self, max_data_size: int) -> tuple[int, int, list[int], int]:
+        self.sniff_calls.append(("i2c_spy_status", {"max_data_size": max_data_size}))
+        if self._i2c_spy_idx < len(self._i2c_spy_sequence):
+            result = self._i2c_spy_sequence[self._i2c_spy_idx]
+            self._i2c_spy_idx += 1
+            return result
+        return (0, 0, [], 0)  # no new data
+
+    def i2c_spy_stop(self) -> None:
+        self.sniff_calls.append(("i2c_spy_stop", {}))
+
+    def uart_sniff(
+        self, rx_pin_idx: int, baud: int, data_bits: int, parity: str, stop_bits: int,
+        duration_s: float, poll_interval_s: float,
+    ) -> list[tuple[float, bytes, bool]]:
+        self.sniff_calls.append(("uart_sniff", {"baud": baud}))
+        return list(self._uart_sniff_frames)
+
+    def can_sniff(
+        self, rx_pin_idx: int, bitrate: int, duration_s: float, poll_interval_s: float,
+    ) -> list[tuple[float, int, bytes, bool, int]]:
+        self.sniff_calls.append(("can_sniff", {"bitrate": bitrate}))
+        return list(self._can_sniff_frames)
+
+    # Test helpers
+    def set_i2c_spy_sequence(self, seq: list[tuple[int, int, list[int], int]]) -> None:
+        self._i2c_spy_sequence = list(seq)
+        self._i2c_spy_idx = 0
+
+    def set_uart_sniff_frames(self, frames: list[tuple[float, bytes, bool]]) -> None:
+        self._uart_sniff_frames = list(frames)
+
+    def set_can_sniff_frames(self, frames: list[tuple[float, int, bytes, bool, int]]) -> None:
+        self._can_sniff_frames = list(frames)
 
     # --- Scope record-mode ---
 

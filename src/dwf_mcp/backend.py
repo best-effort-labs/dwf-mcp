@@ -252,3 +252,38 @@ class DwfBackend(ABC):
 
     def can_receive(self, timeout_s: float) -> tuple[int | None, bytes, bool, int]:
         raise NotImplementedError
+
+    # Sniff — stage 4.
+
+    def i2c_spy_start(self) -> None:
+        raise NotImplementedError
+
+    def i2c_spy_status(self, max_data_size: int) -> tuple[int, int, list[int], int]:
+        """Returns (start, stop, data_bytes, nak)."""
+        raise NotImplementedError
+
+    def i2c_spy_stop(self) -> None:
+        raise NotImplementedError
+
+    def uart_sniff(
+        self,
+        rx_pin_idx: int,
+        baud: int,
+        data_bits: int,
+        parity: str,
+        stop_bits: int,
+        duration_s: float,
+        poll_interval_s: float,
+    ) -> list[tuple[float, bytes, bool]]:
+        """Returns list of (timestamp_s, data, parity_error)."""
+        raise NotImplementedError
+
+    def can_sniff(
+        self,
+        rx_pin_idx: int,
+        bitrate: int,
+        duration_s: float,
+        poll_interval_s: float,
+    ) -> list[tuple[float, int, bytes, bool, int]]:
+        """Returns list of (timestamp_s, frame_id, data, extended, error_count)."""
+        raise NotImplementedError
