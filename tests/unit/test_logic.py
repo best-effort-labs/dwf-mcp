@@ -37,7 +37,7 @@ def logic(device: DwfDevice, tmp_path: Path) -> Logic:
 def test_configure_claims_pins(logic: Logic) -> None:
     logic.configure(pins=["dio0", "dio1"], sample_rate_hz=1_000_000, buffer_size=1024)
     claimed = logic.device.allocator.claimed_pins()
-    assert "dio0" in claimed and "dio1" in claimed
+    assert "dio0" in claimed and "dio1" in claimed and "digital_in" in claimed
 
 
 def test_configure_calls_backend(logic: Logic) -> None:

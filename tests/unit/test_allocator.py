@@ -52,3 +52,56 @@ def test_clear_releases_everything(alloc: PinAllocator) -> None:
     alloc.claim("uart", ["dio2", "dio3"])
     alloc.clear()
     assert alloc.claimed_pins() == {}
+
+
+# --- claim_observe tests ---
+
+def test_claim_observe_succeeds_when_digital_in_free() -> None:
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_spi")
+    assert "sniff_spi" in alloc._observe_claims
+
+
+def test_claim_observe_blocked_when_digital_in_exclusively_claimed() -> None:
+    alloc = PinAllocator()
+    alloc.claim("logic", ["digital_in", "dio0"])
+    with pytest.raises(PinAllocationError, match="cannot observe DigitalIn"):
+        alloc.claim_observe("sniff_spi")
+
+
+def test_exclusive_digital_in_blocked_when_observer_exists() -> None:
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_spi")
+    with pytest.raises(PinAllocationError, match="cannot claim DigitalIn"):
+        alloc.claim("logic", ["digital_in", "dio0"])
+
+
+def test_second_observer_blocked() -> None:
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_spi_1")
+    with pytest.raises(PinAllocationError, match="already observing"):
+        alloc.claim_observe("sniff_spi_2")
+
+
+def test_observe_does_not_conflict_with_write_claims_on_same_pins() -> None:
+    """DigitalIn observer and DigitalOut writer on the same physical pins should NOT conflict."""
+    alloc = PinAllocator()
+    alloc.claim("spi", ["spi_engine", "dio0", "dio1"])
+    # claim_observe should succeed even though spi holds dio0/dio1 as write claims
+    alloc.claim_observe("sniff_spi")  # should not raise
+
+
+def test_release_removes_observe_claim() -> None:
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_spi")
+    alloc.release("sniff_spi")
+    assert "sniff_spi" not in alloc._observe_claims
+    # Can claim_observe again after release
+    alloc.claim_observe("sniff_spi_2")
+
+
+def test_clear_removes_observe_claims() -> None:
+    alloc = PinAllocator()
+    alloc.claim_observe("sniff_spi")
+    alloc.clear()
+    assert len(alloc._observe_claims) == 0
