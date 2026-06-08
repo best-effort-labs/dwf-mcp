@@ -177,8 +177,10 @@ class Sniff(Instrument):
                 log.exception("sniff.i2c artifact write failed")
                 artifact_error = str(exc)
         finally:
-            with suppress(Exception):
+            try:
                 self.device.backend.i2c_spy_stop()
+            except Exception as exc:
+                log.warning("i2c_spy_stop failed: %s", exc)
             self.device.allocator.release("sniff_i2c")
 
         sidecar_path = artifact_path.replace(".parquet", ".json") if artifact_path else None
@@ -352,8 +354,10 @@ class Sniff(Instrument):
             )
             self.device.backend.logic_record_arm()
         except Exception:
-            with suppress(Exception):
+            try:
                 self.device.backend.logic_record_stop()
+            except Exception as exc:
+                log.warning("logic_record_stop during spi_start cleanup failed: %s", exc)
             self.device.allocator.release(allocator_key)
             raise
 
@@ -416,8 +420,10 @@ class Sniff(Instrument):
                     await session.task
 
             # 2. Stop hardware
-            with suppress(Exception):
+            try:
                 self.device.backend.logic_record_stop()
+            except Exception as exc:
+                log.warning("logic_record_stop in spi_stop failed: %s", exc)
 
             # 3. Drain remaining samples
             try:
@@ -481,8 +487,11 @@ class Sniff(Instrument):
         self.device.allocator.release("sniff_uart")
         self.device.allocator.release("sniff_can")
         for sniff_id in list(self._spi_sessions):
-            with suppress(Exception):
+            try:
                 self.device.backend.logic_record_stop()
+            except Exception as exc:
+                log.warning("logic_record_stop during sniff.release for %s failed: %s",
+                            sniff_id, exc)
             self.device.allocator.release(f"sniff_spi_{sniff_id}")
         self._spi_sessions.clear()
 
@@ -496,8 +505,11 @@ def _close_i2c_transaction(
     address = addr_byte >> 1
     direction = "read" if (addr_byte & 1) else "write"
     data = bytes(pending_bytes[1:])
-    # NAK encoding: verify empirically at implementation time (TODO per spec).
-    nak_at_byte: int | None = nak if nak else None
+    # pydwf i2c.spyStatus returns `nak` as a 1-based byte index where the NAK
+    # occurred (counting the address byte as byte 1); 0 means no NAK.
+    # We expose `nak_at_byte` as a 0-based index across the full transmission
+    # (address = 0, first data byte = 1, ...).
+    nak_at_byte: int | None = (nak - 1) if nak > 0 else None
     out.append({
         "timestamp_s": timestamp_s,
         "type": direction,
@@ -506,7 +518,11 @@ def _close_i2c_transaction(
         "data": data,
         "nak_at_byte": nak_at_byte,
         "error": bool(nak),
-        "error_detail": f"nak at byte {nak_at_byte}" if nak_at_byte is not None else None,
+        "error_detail": (
+            "nak on address byte" if nak_at_byte == 0
+            else f"nak on data byte {nak_at_byte - 1}" if nak_at_byte is not None
+            else None
+        ),
     })
 
 

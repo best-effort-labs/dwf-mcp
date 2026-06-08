@@ -28,6 +28,18 @@ class _AsyncInstrument(Instrument):
 
 
 @pytest.mark.asyncio
+async def test_instrument_tool_before_open_returns_clean_error(tmp_path) -> None:
+    """Calling an instrument tool before waveforms.open should return a clean
+    DwfDeviceLost error dict, not crash inside the instrument constructor."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    # Device deliberately NOT opened.
+    result = await app.call_tool("supply.set", {"channel": "vplus", "voltage": 3.3})
+    assert "error" in result, f"expected error dict, got {result}"
+    assert result["error"]["type"] == "DwfDeviceLost"
+
+
+@pytest.mark.asyncio
 async def test_handler_awaits_coroutine(tmp_path):
     from dwf_mcp.server import build_app
     app = build_app(backend_name="fake", workspace=str(tmp_path))

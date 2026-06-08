@@ -272,8 +272,8 @@ class Logic(Instrument):
             if vcd_w is not None:
                 try:
                     vcd_w.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.warning("vcd_w.close during record_start cleanup failed: %s", exc)
             self.device.allocator.release("logic")
             raise
 
@@ -325,13 +325,13 @@ class Logic(Instrument):
                 session.task.cancel()
             try:
                 self.device.backend.logic_record_stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("logic_record_stop during record_start cleanup failed: %s", exc)
             if vcd_w is not None:
                 try:
                     vcd_w.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.warning("vcd_w.close during record_start cleanup failed: %s", exc)
             self.device.allocator.release("logic")
             raise
 

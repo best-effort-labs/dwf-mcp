@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from pathlib import Path
 
 import pytest
 import pyarrow.parquet as pq
+
+from tests.hardware.conftest import wait_for_sniff_claim
 
 pytestmark = pytest.mark.hardware
 
@@ -92,7 +93,7 @@ def test_sniff_i2c_rp2350b_write_transaction(app, jumperless, tmp_path: Path) ->
 
     t = threading.Thread(target=run_sniff)
     t.start()
-    time.sleep(0.2)  # let sniff configure + start
+    wait_for_sniff_claim(app, "sniff_i2c")
 
     jumperless.exec("""
 from machine import I2C, Pin
@@ -149,7 +150,7 @@ def test_sniff_i2c_multiple_transactions(app, jumperless, tmp_path: Path) -> Non
 
     t = threading.Thread(target=run_sniff)
     t.start()
-    time.sleep(0.2)
+    wait_for_sniff_claim(app, "sniff_i2c")
 
     jumperless.exec("""
 from machine import I2C, Pin

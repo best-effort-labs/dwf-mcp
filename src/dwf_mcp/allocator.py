@@ -21,6 +21,13 @@ class ResourceGroup:
 
 @dataclass
 class PinAllocator:
+    """Tracks which instrument owns which DIO pins / virtual resources.
+
+    Not thread-safe: assumes single-threaded access (the MCP server runs one
+    coroutine per tool call sequentially in a single asyncio event loop). If
+    you ever move backend polling to a worker thread, add a Lock around the
+    `claim`/`release`/`claim_observe` methods.
+    """
     resource_groups: list[ResourceGroup] = field(default_factory=list)
     _claims: dict[str, list[str]] = field(default_factory=dict)
     _observe_claims: set[str] = field(default_factory=set)  # instruments with DigitalIn observer claim

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, ClassVar
 
@@ -8,6 +9,8 @@ import numpy as np
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument
+
+log = logging.getLogger(__name__)
 
 _VALID_COUPLINGS = {"DC", "AC"}
 
@@ -58,8 +61,8 @@ class DMM(Instrument):
         finally:
             try:
                 self.device.backend.dmm_stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("dmm_stop failed: %s", exc)
             self.device.allocator.release("dmm")
         arr = np.asarray(samples, dtype=np.float64)
         return {

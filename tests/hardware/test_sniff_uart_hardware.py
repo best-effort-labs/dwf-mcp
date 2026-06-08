@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
+
+from tests.hardware.conftest import wait_for_sniff_claim
 
 pytestmark = pytest.mark.hardware
 
@@ -69,9 +70,7 @@ def test_sniff_uart_rp2350b_short_message(app, jumperless, tmp_path: Path) -> No
 
     t = threading.Thread(target=run_sniff)
     t.start()
-
-    # Let sniff configure + start receive before stimulus fires
-    time.sleep(0.2)
+    wait_for_sniff_claim(app, "sniff_uart")
 
     jumperless.exec("""
 from machine import UART
@@ -117,7 +116,7 @@ def test_sniff_uart_rp2350b_higher_baud(app, jumperless, tmp_path: Path) -> None
 
     t = threading.Thread(target=run_sniff)
     t.start()
-    time.sleep(0.15)
+    wait_for_sniff_claim(app, "sniff_uart")
 
     jumperless.exec("""
 from machine import UART

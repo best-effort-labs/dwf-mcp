@@ -125,6 +125,10 @@ class DwfMcpApp:
 
     def _get_or_create_instrument(self, name: str) -> Instrument:
         if name not in self.instruments:
+            # Construction may touch hardware (e.g. Supply discovers nodes); ensure
+            # the device is open so we surface a clean DwfDeviceLost rather than a
+            # backend exception escaping from __init__.
+            self.device.require_open()
             cls = self.registry.get_class(name)
             self.instruments[name] = cls(device=self.device, artifacts=self.artifacts)
         return self.instruments[name]

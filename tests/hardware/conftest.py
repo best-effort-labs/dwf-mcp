@@ -10,6 +10,26 @@ from dwf_mcp.server import build_app
 from tests.hardware import pinout
 
 
+def wait_for_sniff_claim(app, instrument_key: str, timeout_s: float = 1.5,
+                         setup_grace_s: float = 0.05) -> None:
+    """Block until `instrument_key` appears in the allocator's claimed instruments,
+    then sleep `setup_grace_s` so the spy/configure path can finish arming.
+
+    Used by sniff hardware tests to synchronize the main thread (firing stimulus)
+    with the background sniff thread (configuring the spy) without a fixed sleep.
+    Raises TimeoutError if the claim never appears.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if instrument_key in app.device.allocator.claimed_instruments():
+            time.sleep(setup_grace_s)
+            return
+        time.sleep(0.005)
+    raise TimeoutError(
+        f"sniff thread did not claim {instrument_key!r} within {timeout_s}s"
+    )
+
+
 @pytest.fixture(scope="session")
 def jumperless(pytestconfig: pytest.Config):
     if pytestconfig.getoption("--skip-wiring-prompts"):

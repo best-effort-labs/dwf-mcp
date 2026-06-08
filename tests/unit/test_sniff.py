@@ -107,6 +107,40 @@ def test_sniff_i2c_assembles_write_transaction(sniff: Sniff) -> None:
     assert table.column("address")[0].as_py() == 0x50
 
 
+def test_sniff_i2c_nak_on_address_byte(sniff: Sniff) -> None:
+    """nak=1 from pydwf means NAK on the 1st transmitted byte (the address);
+    we expose it as nak_at_byte=0 (0-based, address counted as byte 0)."""
+    import pyarrow.parquet as pq
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_i2c_spy_sequence([
+        (1, 1, [0xA0], 1),  # start + addr 0x50w + stop, NAK on address (raw nak=1)
+    ])
+    result = asyncio.run(sniff.i2c(
+        sda_pin="dio0", scl_pin="dio1", duration_s=0.02, poll_interval_s=0.001
+    ))
+    assert result["count"] == 1
+    assert result["error_count"] == 1
+    table = pq.read_table(result["artifact_path"])
+    assert table.column("nak_at_byte")[0].as_py() == 0
+    assert table.column("error")[0].as_py() is True
+    assert table.column("error_detail")[0].as_py() == "nak on address byte"
+
+
+def test_sniff_i2c_nak_on_data_byte(sniff: Sniff) -> None:
+    """nak=2 (raw) → NAK on 2nd transmitted byte = first data byte → nak_at_byte=1."""
+    import pyarrow.parquet as pq
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_i2c_spy_sequence([
+        (1, 1, [0xA0, 0x55], 2),  # start + addr + one data byte + stop; NAK on byte 2
+    ])
+    result = asyncio.run(sniff.i2c(
+        sda_pin="dio0", scl_pin="dio1", duration_s=0.02, poll_interval_s=0.001
+    ))
+    table = pq.read_table(result["artifact_path"])
+    assert table.column("nak_at_byte")[0].as_py() == 1
+    assert table.column("error_detail")[0].as_py() == "nak on data byte 0"
+
+
 def test_sniff_i2c_releases_pins(sniff: Sniff) -> None:
     asyncio.run(sniff.i2c(sda_pin="dio0", scl_pin="dio1", duration_s=0.01))
     assert "sniff_i2c" not in sniff.device.allocator.claimed_instruments()
