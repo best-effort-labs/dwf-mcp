@@ -90,6 +90,15 @@ class UartDecoder(Decoder):
                 break
             start_i = i
 
+            # Bail out if there aren't enough remaining samples for a complete
+            # frame — otherwise sample_at() would return idle for OOB indices
+            # and synthesize a phantom 0xFF frame that passes framing/parity.
+            total_bits_needed = (
+                1 + data_bits + (1 if parity != "none" else 0) + stop_bits
+            )
+            if start_i + samples_per_bit * (total_bits_needed - 0.5) >= n:
+                break
+
             # Re-validate the start bit at its mid-point. If it has already
             # returned to idle by then, it was a glitch — advance one sample
             # and resume the search.

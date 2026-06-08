@@ -48,7 +48,7 @@ def test_decode_simple_bytes() -> None:
         baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0,
     )
     payload = b"".join(f.data for f in frames)
-    assert b"Hi!" in payload
+    assert payload == b"Hi!"
 
 
 def test_decode_polarity_inverted() -> None:
@@ -80,3 +80,62 @@ def test_decode_rejects_zero_sample_rate() -> None:
             sample_rate_hz=0,
             baud=9600,
         )
+
+
+def test_decode_parity_even_correct() -> None:
+    """Byte 0x03 has 2 ones (even); even-parity bit must be 0 → no error."""
+    samples = _uart_samples(b"\x03", baud=9600, sample_rate_hz=96000.0, parity="even")
+    decoder = UartDecoder()
+    frames = decoder.decode(
+        samples, {"rx": 0}, sample_rate_hz=96000.0,
+        baud=9600, data_bits=8, parity="even", stop_bits=1, polarity=0,
+    )
+    assert len(frames) == 1
+    assert frames[0].data == b"\x03"
+    assert frames[0].parity_error is False
+    assert frames[0].error is False
+
+
+def test_decode_parity_even_wrong_flags_error() -> None:
+    """Hand-build a frame where the parity bit is wrong; expect parity_error=True."""
+    # 1 start, 8 data (0x03 = LSB-first 11000000), wrong parity bit (1 instead of 0), 1 stop
+    samples_per_bit = 10
+    bits = [1]*20 + [0]*samples_per_bit  # idle + start
+    # data bits LSB-first for 0x03 = bits 1,1,0,0,0,0,0,0
+    for b in [1,1,0,0,0,0,0,0]:
+        bits += [b]*samples_per_bit
+    bits += [1]*samples_per_bit  # WRONG even parity bit (should be 0 for 0x03, but we send 1)
+    bits += [1]*samples_per_bit  # stop
+    bits += [1]*20
+
+    arr = np.zeros((len(bits), 16), dtype=np.uint8)
+    arr[:, 0] = bits
+    decoder = UartDecoder()
+    frames = decoder.decode(
+        arr, {"rx": 0}, sample_rate_hz=samples_per_bit * 9600.0,
+        baud=9600, data_bits=8, parity="even", stop_bits=1, polarity=0,
+    )
+    assert len(frames) == 1
+    assert frames[0].parity_error is True
+    assert frames[0].error is True
+
+
+def test_decode_framing_error_when_stop_bit_low() -> None:
+    """Hand-build a frame whose stop bit is LOW (line broken) → framing_error=True."""
+    samples_per_bit = 10
+    bits = [1]*20 + [0]*samples_per_bit  # idle + start
+    for b in [0,0,0,0,0,0,0,1]:  # 0x80 LSB-first
+        bits += [b]*samples_per_bit
+    bits += [0]*samples_per_bit  # WRONG stop bit (should be 1)
+    bits += [1]*20  # idle after so decode loop can advance
+
+    arr = np.zeros((len(bits), 16), dtype=np.uint8)
+    arr[:, 0] = bits
+    decoder = UartDecoder()
+    frames = decoder.decode(
+        arr, {"rx": 0}, sample_rate_hz=samples_per_bit * 9600.0,
+        baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0,
+    )
+    assert len(frames) >= 1
+    assert frames[0].framing_error is True
+    assert frames[0].error is True
