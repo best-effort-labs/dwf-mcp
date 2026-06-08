@@ -2,7 +2,7 @@
 
 ## Overview
 
-Stage 5 adds **software state-machine decoders** for I2C, UART, and CAN that operate on raw `DigitalIn` captures (**npz** artifacts from `logic.record_start`), and wires them into the existing `sniff.*` tools behind an `observe=True` flag. The decoders themselves write **parquet** matching the existing `sniff.{i2c,uart,can}` output shape, so consumers don't care which path produced the result.
+Stage 5 adds **software state-machine decoders** for I2C, UART, and CAN that operate on raw `DigitalIn` captures (**npz** artifacts written by `logic.record_stop`), and adds new async observe-mode sniff tools (`sniff.{i2c,uart,can}_start/status/stop`) that capture via `DigitalIn` and run those same decoders. The blocking `sniff.{i2c,uart,can}` engine-mode tools are unchanged; observe-mode is opt-in via the new start tools. All paths write **parquet** matching the existing `sniff.{i2c,uart,can}` output shape, so consumers can't tell which path produced the result.
 
 The motivating constraint: the AD3 has exactly **one** I2C / UART / CAN protocol engine in hardware. Today, `sniff.i2c` uses the I2C engine's `spyStart` and therefore cannot run concurrently with `i2c.scan` / `i2c.write` / `i2c.read` — they conflict via the `i2c_engine` virtual claim. The `DigitalIn` logic-analyzer block is a separate hardware unit, so capturing protocol traffic on DIO pins while the protocol-engine master is busy is physically possible if we decode in software. `sniff.spi` already does this; this stage extends the same pattern to I2C/UART/CAN.
 
@@ -24,7 +24,7 @@ decoder.can(capture_path, rx_pin, bitrate, output_path?)
   → {artifact_path, sidecar_path, count, error_count, artifact_error?, summary}
 ```
 
-Each tool reads the **npz** emitted by `logic.record_start` plus its JSON sidecar (for `pins`, `sample_rate_hz`), runs a state-machine decoder over the raw samples, and writes a **parquet** of decoded transactions/frames matching the schema already used by `sniff.{i2c,uart,can}`.
+Each tool reads the **npz** written by `logic.record_stop` plus its JSON sidecar (for `pins`, `sample_rate_hz`), runs a state-machine decoder over the raw samples, and writes a **parquet** of decoded transactions/frames matching the schema already used by `sniff.{i2c,uart,can}`.
 
 ## New Async Sniff Tools — `sniff.{i2c,uart,can}_start/status/stop`
 
@@ -33,15 +33,18 @@ The existing **blocking** `sniff.{i2c,uart,can}(duration_s=...)` tools are uncha
 Stage 5 adds **async observe-mode** counterparts that mirror the existing `sniff.spi_start/status/stop` lifecycle:
 
 ```
-sniff.i2c_start(sda_pin, scl_pin, clock_hz, sample_rate_hz_override?, output_path?)
+sniff.i2c_start(sda_pin, scl_pin, clock_hz, max_duration_s,
+                sample_rate_hz?, output_path?)
   → {sniff_id}
 
 sniff.i2c_status(sniff_id)
-  → {samples_received, lost_samples}
+  → {samples_received, lost_samples, done}
 
 sniff.i2c_stop(sniff_id)
   → {artifact_path, sidecar_path, count, error_count, artifact_error?, summary}
 ```
+
+`max_duration_s` is **required** and bounds the worst-case memory footprint. The capture auto-stops after `max_duration_s` even if `*_stop` is never called (prevents orphan sessions from holding hardware indefinitely). `*_status` returns `done=True` once the capture has self-stopped; the caller still has to call `*_stop` to drain samples, decode, and release the claim.
 
 Same three-tool shape for `uart` and `can`. The start tool returns immediately; capture runs in a background `record_loop` task; stop terminates capture, decodes via the software decoder, and writes a parquet matching the existing `sniff.{i2c,uart,can}` row schema.
 
@@ -87,10 +90,23 @@ class XDecoder:
 `sniff.py` grows three new tool methods (`i2c_start`/`i2c_status`/`i2c_stop` and analogues for uart/can) that mirror the existing `spi_start`/`spi_status`/`spi_stop` implementation. They:
 
 1. Call `backend.logic_record_configure/arm` **directly** (NOT the public `Logic` instrument — that would claim physical DIO pins and conflict with the master we're trying to coexist with).
-2. Spin up `record_loop` as a background asyncio task.
+2. Spin up `record_loop` as a background asyncio task. The backend's `logic_record_configure` is given `duration_s=max_duration_s` so hardware self-stops at the cap.
 3. On `stop`, cancel the task, drain remaining samples via `backend.logic_record_status` + `read`, run the corresponding decoder, write a parquet sidecar, release the `claim_observe`.
 
 The pattern is identical to `sniff.spi_start/stop` (today's only async observe path). The three new protocols just plug in different decoders. Refactor `sniff.spi_start/stop`'s plumbing into a shared `_AsyncSniffSession` helper to avoid four near-duplicate copies.
+
+### Start failure cleanup contract
+
+`*_start` may fail at any of: `claim_observe`, `logic_record_configure`, `logic_record_arm`, `RecordingSession` construction, or `asyncio.create_task`. Every path that has acquired a resource must roll it back before raising:
+
+```
+claim_observe       → must release on any later failure
+logic_record_configure → must call logic_record_stop on any later failure
+logic_record_arm    → must call logic_record_stop on any later failure
+task creation fail  → must call logic_record_stop AND release claim
+```
+
+The implementation uses a single `try` around steps 2-3 with a `except: cleanup; raise` that calls `logic_record_stop()` (under `try/except log.warning`) and `allocator.release(allocator_key)`. The existing `sniff.spi_start` (lines 354-358) is the template. The shared `_AsyncSniffSession` helper centralizes this so the three new protocols can't drift.
 
 ---
 
@@ -224,16 +240,17 @@ DECODER_CAN_SCHEMA = {
 
 ### `sniff.*_start` schemas (async observe-mode)
 
-Each start tool takes the same protocol params as its blocking counterpart **plus** an optional `sample_rate_hz` override. Without override, sample rate defaults to `10 × clock_hz` (I2C), `10 × baud` (UART), or `20 × bitrate` (CAN — needed for the 75% sample point per the CAN section).
+Each start tool takes the same protocol params as its blocking counterpart **plus** required `max_duration_s` (memory cap + auto-stop) and an optional `sample_rate_hz` override. Without override, sample rate defaults to `10 × clock_hz` (I2C), `10 × baud` (UART), or `20 × bitrate` (CAN — needed for the 75% sample point per the CAN section).
 
 ```python
 SNIFF_I2C_START_SCHEMA = {
     "type": "object",
-    "required": ["sda_pin", "scl_pin", "clock_hz"],
+    "required": ["sda_pin", "scl_pin", "clock_hz", "max_duration_s"],
     "properties": {
         "sda_pin": {"type": "string", "pattern": _PIN_RE},
         "scl_pin": {"type": "string", "pattern": _PIN_RE},
         "clock_hz": {"type": "integer", "minimum": 1_000},
+        "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
         "sample_rate_hz": {"type": "number", "minimum": 1_000.0},  # optional override
         "output_path": {"type": "string"},
     },
@@ -241,10 +258,11 @@ SNIFF_I2C_START_SCHEMA = {
 
 SNIFF_UART_START_SCHEMA = {
     "type": "object",
-    "required": ["rx_pin", "baud"],
+    "required": ["rx_pin", "baud", "max_duration_s"],
     "properties": {
         "rx_pin": {"type": "string", "pattern": _PIN_RE},
         "baud": {"type": "integer", "minimum": 300},
+        "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
         "data_bits": {"type": "integer", "enum": [5, 6, 7, 8], "default": 8},
         "parity": {"type": "string", "enum": ["none", "odd", "even"], "default": "none"},
         "stop_bits": {"type": "integer", "enum": [1, 2], "default": 1},
@@ -256,21 +274,24 @@ SNIFF_UART_START_SCHEMA = {
 
 SNIFF_CAN_START_SCHEMA = {
     "type": "object",
-    "required": ["rx_pin", "bitrate"],
+    "required": ["rx_pin", "bitrate", "max_duration_s"],
     "properties": {
         "rx_pin": {"type": "string", "pattern": _PIN_RE},
         "bitrate": {"type": "integer", "minimum": 10_000},
+        "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
         "sample_rate_hz": {"type": "number", "minimum": 1_000.0},
         "output_path": {"type": "string"},
     },
 }
 ```
 
-`SNIFF_I2C_STATUS_SCHEMA` / `STOP_SCHEMA` (and uart/can analogues) follow the existing `SPI_STATUS_SCHEMA` / `SPI_STOP_SCHEMA` shape: required `{"sniff_id": string}`.
+`SNIFF_I2C_STATUS_SCHEMA` / `STOP_SCHEMA` (and uart/can analogues) follow the existing `SPI_STATUS_SCHEMA` / `SPI_STOP_SCHEMA` input shape: required `{"sniff_id": string}`.
 
-**Sample-rate caps:**
+**Status return shape:** `{samples_received, lost_samples, done}`. The new `done` field reports whether the capture has self-stopped (because `max_duration_s` elapsed or the backend signalled `DwfState.Done`). It is added to `sniff.spi_status` as well — additive, non-breaking, and useful so callers can detect auto-stop without polling for sample-count plateaus.
+
+**Sample-rate caps (enforced at `*_start`):**
 - Floor: enforced per-protocol (I2C requires ≥ 4× clock, UART ≥ 4× baud, CAN ≥ 8× bitrate per the CAN section). Below the floor → `ValueError`.
-- Ceiling: `sample_rate_hz × duration_s × n_pins ≤ 100 MB raw` (uint8 per sample). Above → `ValueError` with a suggested cap.
+- Ceiling: `sample_rate_hz × max_duration_s × n_pins ≤ 100 MB raw` (uint8 per sample). Above → `ValueError` with a suggested cap. Bounded because `max_duration_s` is required and itself capped at 3600 s.
 
 The existing blocking `sniff.{i2c,uart,can}` schemas are unchanged. No `observe` flag added anywhere.
 
@@ -307,7 +328,7 @@ A missing or malformed sidecar is a hard error returned via `artifact_error`. Un
 - `tests/unit/test_uart_decoder.py` — generator for byte sequences at various baud / parity / stop / polarity combinations. Cover: clean bytes, parity error, framing error, break condition.
 - `tests/unit/test_can_decoder.py` — generator for standard CAN frames. Cover: simple frame, max-DLC (8 bytes), bit-stuffing required, CRC mismatch.
 - `tests/unit/test_decoder.py` already covers the tool-layer dispatch; extend with i2c/uart/can cases that pass a real (small) capture file through and assert the artifact path + count.
-- `tests/unit/test_sniff.py` extends to cover `observe=True` paths for each protocol against the fake backend.
+- `tests/unit/test_sniff.py` extends to cover the new `sniff.{i2c,uart,can}_start/status/stop` async tools against the fake backend: start succeeds; status reports samples + `done`; stop decodes + releases claim; start-failure rollback releases the claim and stops record mode; `max_duration_s` self-stops (status returns `done=True` after the cap); memory-cap violation at start raises `ValueError` before any hardware call.
 
 ### Hardware tests
 
