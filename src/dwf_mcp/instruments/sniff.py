@@ -18,6 +18,7 @@ from dwf_mcp.instruments._async_sniff import (
     start_observe_session,
     stop_observe_session,
 )
+from dwf_mcp.instruments.decoder.can import CanDecoder
 from dwf_mcp.instruments.decoder.i2c import I2cDecoder
 from dwf_mcp.instruments.decoder.uart import UartDecoder
 
@@ -136,6 +137,18 @@ SNIFF_UART_START_SCHEMA: dict[str, Any] = {
     },
 }
 
+SNIFF_CAN_START_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["rx_pin", "bitrate", "max_duration_s"],
+    "properties": {
+        "rx_pin": {"type": "string", "pattern": _PIN_RE},
+        "bitrate": {"type": "integer", "minimum": 10_000},
+        "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
+        "sample_rate_hz": {"type": "number", "minimum": 1_000.0},
+        "output_path": {"type": "string"},
+    },
+}
+
 
 class Sniff(Instrument):
     name = "sniff"
@@ -152,6 +165,9 @@ class Sniff(Instrument):
         "uart_start":  ("uart_start",  SNIFF_UART_START_SCHEMA),
         "uart_status": ("uart_status", SNIFF_STATUS_SCHEMA),
         "uart_stop":   ("uart_stop",   SNIFF_STOP_SCHEMA),
+        "can_start":   ("can_start",   SNIFF_CAN_START_SCHEMA),
+        "can_status":  ("can_status",  SNIFF_STATUS_SCHEMA),
+        "can_stop":    ("can_stop",    SNIFF_STOP_SCHEMA),
     }
 
     def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
@@ -704,6 +720,111 @@ class Sniff(Instrument):
                 error_count = sum(1 for f in frames if f.error)
             except Exception as exc:
                 log.exception("sniff.uart_stop decode/write failed for %s", sniff_id)
+                artifact_error = str(exc)
+        finally:
+            self.device.allocator.release(session.allocator_key)
+
+        sidecar_path = artifact_path.replace(".parquet", ".json") if artifact_path else None
+        return {
+            "artifact_path": artifact_path,
+            "sidecar_path": sidecar_path,
+            "count": count,
+            "error_count": error_count,
+            "lost_samples": lost_samples,
+            "artifact_error": artifact_error,
+            "summary": {},
+        }
+
+    # --- sniff.can_start / can_status / can_stop (async observe-mode) ---
+
+    async def can_start(
+        self,
+        rx_pin: str,
+        bitrate: int,
+        max_duration_s: float,
+        sample_rate_hz: float | None = None,
+        output_path: str | None = None,
+    ) -> dict[str, Any]:
+        # Default 20× oversampling — CAN spec requires >=8× per bit; 20× gives
+        # safe headroom for the 75 % sample point and bit-stuff destuffing.
+        rate = float(sample_rate_hz) if sample_rate_hz else float(bitrate) * 20.0
+        if rate / float(bitrate) < 8.0:
+            raise ValueError(
+                f"CAN decode requires >=8x oversampling, got {rate / float(bitrate):.1f}x"
+            )
+        check_memory_cap(rate, max_duration_s, n_pins=1)
+
+        sniff_id = str(uuid.uuid4())
+        allocator_key = f"sniff_can_{sniff_id}"
+        pin_mask = 1 << _dio_index(rx_pin)
+        meta: dict[str, Any] = {
+            "sniff_id": sniff_id,
+            "rx_pin": rx_pin,
+            "bitrate": bitrate,
+            "sample_rate_hz": rate,
+            "max_duration_s": max_duration_s,
+            "output_path": output_path,
+        }
+        session = start_observe_session(
+            device=self.device,
+            allocator_key=allocator_key,
+            pin_mask=pin_mask,
+            sample_rate_hz=rate,
+            max_duration_s=max_duration_s,
+            meta=meta,
+        )
+        self._async_sessions[sniff_id] = session
+        reap_completed_sessions(self._async_sessions, self.device)
+        return {"sniff_id": sniff_id}
+
+    def can_status(self, sniff_id: str) -> dict[str, Any]:
+        reap_completed_sessions(self._async_sessions, self.device)
+        session = self._async_sessions.get(sniff_id)
+        if session is None:
+            raise ValueError(f"unknown sniff_id {sniff_id!r}")
+        rs = session.record_session
+        total = sum(len(c) for c in rs.chunks)
+        return {
+            "samples_received": total,
+            "lost_samples": rs.lost_samples,
+            "done": rs.done,
+        }
+
+    async def can_stop(self, sniff_id: str) -> dict[str, Any]:
+        session = self._async_sessions.pop(sniff_id, None)
+        if session is None:
+            raise ValueError(f"unknown sniff_id {sniff_id!r}")
+
+        artifact_path: str | None = None
+        artifact_error: str | None = None
+        count = 0
+        error_count = 0
+        try:
+            samples, lost_samples = await stop_observe_session(session, self.device)
+            meta = session.meta
+            try:
+                if samples.shape[0] > 0:
+                    decoder = CanDecoder()
+                    frames = decoder.decode(
+                        samples,
+                        {"rx": _dio_index(meta["rx_pin"])},
+                        sample_rate_hz=meta["sample_rate_hz"],
+                        bitrate=meta["bitrate"],
+                    )
+                else:
+                    frames = []
+                records = [f.to_dict() for f in frames]
+                result = self.artifacts.write_parquet(
+                    "sniff_can",
+                    records,
+                    config={k: v for k, v in meta.items() if k != "sniff_id"},
+                    output_path=Path(meta["output_path"]) if meta.get("output_path") else None,
+                )
+                artifact_path = result.path
+                count = len(frames)
+                error_count = sum(1 for f in frames if f.error)
+            except Exception as exc:
+                log.exception("sniff.can_stop decode/write failed for %s", sniff_id)
                 artifact_error = str(exc)
         finally:
             self.device.allocator.release(session.allocator_key)

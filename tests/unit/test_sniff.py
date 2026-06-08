@@ -419,3 +419,60 @@ def test_sniff_uart_does_not_claim_uart_engine_or_dio(sniff: Sniff) -> None:
         await sniff.uart_stop(r["sniff_id"])
 
     asyncio.run(run())
+
+
+# --- sniff.can_start / can_status / can_stop (async observe-mode) ---
+
+
+def test_sniff_can_start_returns_id(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 1)])
+
+    async def run() -> dict:
+        r = await sniff.can_start(rx_pin="dio0", bitrate=125_000, max_duration_s=0.1)
+        await sniff.can_stop(r["sniff_id"])
+        return r
+
+    result = asyncio.run(run())
+    assert "sniff_id" in result
+    assert isinstance(result["sniff_id"], str)
+
+
+def test_sniff_can_default_sample_rate_is_20x_bitrate(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 1)])
+
+    async def run() -> None:
+        r = await sniff.can_start(rx_pin="dio0", bitrate=100_000, max_duration_s=0.05)
+        session = sniff._async_sessions[r["sniff_id"]]
+        assert session.meta["sample_rate_hz"] == 2_000_000  # 20x
+        await sniff.can_stop(r["sniff_id"])
+
+    asyncio.run(run())
+
+
+def test_sniff_can_memory_cap_raises(sniff: Sniff) -> None:
+    with pytest.raises(ValueError, match="32 MB"):
+        asyncio.run(sniff.can_start(
+            rx_pin="dio0", bitrate=125_000, max_duration_s=3600, sample_rate_hz=100e6,
+        ))
+
+
+def test_sniff_can_oversampling_rejected(sniff: Sniff) -> None:
+    with pytest.raises(ValueError, match="oversampling"):
+        asyncio.run(sniff.can_start(
+            rx_pin="dio0", bitrate=125_000, max_duration_s=0.1,
+            sample_rate_hz=500_000,  # 4x — below 8x floor for CAN
+        ))
+
+
+def test_sniff_can_does_not_claim_can_engine_or_dio(sniff: Sniff) -> None:
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(0, 0, 1)])
+
+    async def run() -> None:
+        r = await sniff.can_start(rx_pin="dio0", bitrate=125_000, max_duration_s=0.1)
+        sniff.device.allocator.claim("can_master", ["can_engine", "dio0"])
+        await sniff.can_stop(r["sniff_id"])
+
+    asyncio.run(run())
