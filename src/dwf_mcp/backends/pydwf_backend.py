@@ -195,10 +195,10 @@ class PydwfBackend(DwfBackend):
         sample_rate_hz: float,
         duration_s: float,
     ) -> None:
-        from pydwf.core.auxiliary.enum_types import DwfAcquisitionMode, DwfAnalogInCoupling
+        from pydwf.core.auxiliary.enum_types import DwfAcquisitionMode
         coupling_map = {
-            "DC": DwfAnalogInCoupling.DC,
-            "AC": DwfAnalogInCoupling.AC,
+            "DC": DwfAnalogCoupling.DC,
+            "AC": DwfAnalogCoupling.AC,
         }
         ai = self._analog_in
         for ch in (0, 1):  # 0-indexed; channels list uses 1-indexed
@@ -214,9 +214,12 @@ class PydwfBackend(DwfBackend):
         self._analog_in.configure(False, True)
 
     def scope_record_status(self) -> tuple[int, int, int]:
-        self._analog_in.status(True)
-        available, lost, remaining = self._analog_in.statusRecord()
-        return int(available), int(lost), int(remaining)
+        from pydwf.core.auxiliary.enum_types import DwfState
+        state = self._analog_in.status(True)
+        available, lost, _ = self._analog_in.statusRecord()
+        # statusRecord()'s third value is corrupt-sample count (always 0), not remaining.
+        # Return 0 when the device signals Done so record_loop exits correctly.
+        return int(available), int(lost), 0 if state == DwfState.Done else 1
 
     def scope_record_read(self, count: int) -> np.ndarray:
         ai = self._analog_in
@@ -317,6 +320,16 @@ class PydwfBackend(DwfBackend):
     def i2c_write_one(self, address: int, byte: int) -> int:
         return int(self._i2c.writeOne(address << 1, byte))
 
+    def i2c_spy_start(self) -> None:
+        self._device.protocol.i2c.spyStart()
+
+    def i2c_spy_status(self, max_data_size: int) -> tuple[int, int, list[int], int]:
+        start, stop, data, nak = self._device.protocol.i2c.spyStatus(max_data_size)
+        return int(start), int(stop), [int(b) for b in data], int(nak)
+
+    def i2c_spy_stop(self) -> None:
+        self._device.protocol.i2c.reset()
+
     # --- AWG (AnalogOut) ----------------------------------------------------
 
     @property
@@ -383,12 +396,13 @@ class PydwfBackend(DwfBackend):
         duty: float, idle_state: str,
     ) -> None:
         from pydwf import (  # type: ignore[import-untyped]
-            DwfDigitalOutIdle, DwfDigitalOutType,
+            DwfDigitalOutIdle,
+            DwfDigitalOutType,
         )
         dout = self._digital_out
         type_map = {
             "Pulse":  DwfDigitalOutType.Pulse,
-            "Clock":  DwfDigitalOutType.Clock,
+            "Clock":  DwfDigitalOutType.Pulse,  # pydwf has no Clock type; Pulse generates a periodic waveform
             "Random": DwfDigitalOutType.Random,
             "Custom": DwfDigitalOutType.Custom,
         }
@@ -397,10 +411,14 @@ class PydwfBackend(DwfBackend):
             "high": DwfDigitalOutIdle.High,
             "hiz":  DwfDigitalOutIdle.Init,  # Init = Hi-Z on AD3
         }
+        clock = dout.internalClockInfo()
+        period = max(1, round(clock / freq_hz))
+        high_count = max(1, round(period * duty))
+        low_count = max(1, period - high_count)
         dout.enableSet(pin_idx, True)
         dout.typeSet(pin_idx, type_map[function])
-        dout.frequencySet(pin_idx, freq_hz)
-        dout.dutyCycleSet(pin_idx, duty)
+        dout.dividerSet(pin_idx, 1)
+        dout.counterSet(pin_idx, low_count, high_count)
         dout.idleSet(pin_idx, idle_map[idle_state])
 
     def pattern_start(self, pin_idx: int) -> None:
@@ -490,7 +508,7 @@ class PydwfBackend(DwfBackend):
         return str(getattr(st, "name", st))
 
     def logic_read(self, count: int) -> np.ndarray:
-        raw = self._digital_in.statusData2(count)
+        raw = self._digital_in.statusData2(0, count)
         arr = np.array(raw, dtype=np.uint16)
         result = np.zeros((len(arr), 16), dtype=np.uint8)
         for bit in range(16):
@@ -500,23 +518,35 @@ class PydwfBackend(DwfBackend):
     # --- Logic record-mode (DigitalIn streaming) ----------------------------
 
     def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
+        import time
+
         from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
         din = self._digital_in
         divider = max(1, round(100_000_000 / sample_rate_hz))
         din.dividerSet(divider)
         din.acquisitionModeSet(DwfAcquisitionMode.Record)
-        din.recordLengthSet(duration_s)
+        # DigitalIn has no recordLengthSet; stop is controlled by deadline in logic_record_status.
+        self._logic_record_deadline: float | None = time.monotonic() + duration_s
 
     def logic_record_arm(self) -> None:
         self._digital_in.configure(False, True)
 
     def logic_record_status(self) -> tuple[int, int, int]:
+        import time
+
+        from pydwf.core.auxiliary.enum_types import DwfState
         din = self._digital_in
-        din.status(True)
-        return tuple(din.statusRecord())  # type: ignore[return-value]
+        state = din.status(True)
+        available, lost, _ = din.statusRecord()
+        deadline = getattr(self, "_logic_record_deadline", None)
+        if deadline is not None and time.monotonic() >= deadline:
+            din.configure(False, False)
+            self._logic_record_deadline = None
+            return int(available), int(lost), 0
+        return int(available), int(lost), 0 if state == DwfState.Done else 1
 
     def logic_record_read(self, count: int) -> np.ndarray:
-        raw = self._digital_in.statusData2(count)
+        raw = self._digital_in.statusData2(0, count)
         arr = np.array(raw, dtype=np.uint16)
         result = np.zeros((len(arr), 16), dtype=np.uint8)
         for bit in range(16):
@@ -579,19 +609,18 @@ class PydwfBackend(DwfBackend):
         spi.reset()
         spi.frequencySet(freq_hz)
         spi.modeSet(mode)
-        spi.orderMsbSet(bit_order == "msb")
+        spi.orderSet(1 if bit_order == "msb" else 0)
         spi.clockSet(clk_idx)
         if mosi_idx is not None:
-            spi.dataSet(mosi_idx, 0)
+            spi.dataSet(0, mosi_idx)   # DQ0 = MOSI
         if miso_idx is not None:
-            spi.dataSet(miso_idx, 1)
+            spi.dataSet(1, miso_idx)   # DQ1 = MISO
         if cs_idx is not None:
             polarity = 0 if cs_polarity == "active_low" else 1
             spi.selectSet(cs_idx, polarity)
 
     def spi_transfer(self, data: bytes, assert_cs: bool) -> bytes:
-        dcs = 1 if assert_cs else 0
-        rx = self._spi.writeRead(dcs, len(data) * 8, list(data))
+        rx = self._spi.writeRead(1, 8, list(data))  # 1=MOSI/MISO, 8 bits/word
         return bytes(rx)
 
     def spi_write(self, data: bytes, assert_cs: bool) -> None:
@@ -617,23 +646,73 @@ class PydwfBackend(DwfBackend):
     ) -> None:
         uart = self._uart
         uart.reset()
-        uart.baudrateSet(baud_rate)
-        uart.dataBitsSet(data_bits)
+        uart.rateSet(baud_rate)
+        uart.bitsSet(data_bits)
         parity_map = {"none": 0, "odd": 1, "even": 2}
         uart.paritySet(parity_map[parity])
-        uart.stopBitsSet(stop_bits)
+        uart.stopSet(stop_bits)
         if tx_idx is not None:
             uart.txSet(tx_idx)
+            uart.tx(b"")   # force TX pin to UART idle (HIGH) before enabling RX
         if rx_idx is not None:
             uart.rxSet(rx_idx)
-        uart.enable()
+        uart.rx(0)   # initialize receiver
+        uart.rx(1)   # activate DMA buffer; first non-zero call is always a loss
+        import time as _time
+        _time.sleep(0.010)   # WaveForms firmware needs ~10ms after rx(1) to start buffering
 
     def uart_write(self, data: bytes) -> None:
-        self._uart.tx(list(data))
+        self._uart.tx(data)
 
     def uart_read(self, length: int, timeout_s: float) -> tuple[bytes, bool]:
-        parity_err, rx_data = self._uart.rx(length)
-        return bytes(rx_data), bool(parity_err)
+        import time
+        deadline = time.monotonic() + timeout_s
+        buf = b""
+        parity_err = False
+        while len(buf) < length and time.monotonic() < deadline:
+            rx_data, pe = self._uart.rx(length - len(buf))
+            if rx_data:
+                buf += bytes(rx_data)
+                parity_err = parity_err or bool(pe)
+            else:
+                time.sleep(0.002)
+        return buf, parity_err
+
+    def uart_sniff(
+        self,
+        rx_pin_idx: int,
+        baud: int,
+        data_bits: int,
+        parity: str,
+        stop_bits: int,
+        duration_s: float,
+        poll_interval_s: float,
+    ) -> list[tuple[float, bytes, bool]]:
+        import time
+        uart = self._device.protocol.uart
+        uart.reset()
+        uart.rateSet(baud)
+        uart.bitsSet(data_bits)
+        parity_map = {"none": 0, "odd": 1, "even": 2}
+        uart.paritySet(parity_map[parity])
+        uart.stopSet(stop_bits)
+        uart.rxSet(rx_pin_idx)
+        uart.rx(0)
+        uart.rx(1)
+        try:
+            frames: list[tuple[float, bytes, bool]] = []
+            start_t = time.monotonic()
+            deadline = start_t + duration_s
+            while time.monotonic() < deadline:
+                rx_data, pe = uart.rx(256)
+                if rx_data:
+                    ts = time.monotonic() - start_t
+                    frames.append((ts, bytes(rx_data), bool(pe)))
+                else:
+                    time.sleep(poll_interval_s)
+            return frames
+        finally:
+            uart.reset()
 
     # --- CAN (ProtocolCAN) ----------------------------------------------------
 
@@ -644,21 +723,52 @@ class PydwfBackend(DwfBackend):
         return self._device.protocol.can
 
     def can_configure(self, tx_idx: int, rx_idx: int, bit_rate: int) -> None:
+        import time as _time
         can = self._can
         can.reset()
         can.rateSet(bit_rate)
         can.txSet(tx_idx)
+        _time.sleep(0.010)   # let TX settle to CAN idle before enabling RX
         can.rxSet(rx_idx)
+        can.rx()             # prime the receive buffer
+        _time.sleep(0.010)
 
     def can_send(self, id: int, data: bytes, extended: bool) -> None:
-        self._can.tx(id, int(extended), list(data))
+        self._can.tx(id, bool(extended), False, data)
 
     def can_receive(self, timeout_s: float) -> tuple[int | None, bytes, bool, int]:
         import time
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            status, frame_id, ext, data, error_count = self._can.rx()
+            frame_id, ext, remote, data, status = self._can.rx()
             if status:
-                return frame_id, bytes(data), bool(ext), error_count
+                return frame_id, bytes(data), bool(ext), status
             time.sleep(0.001)
         return None, b"", False, 0
+
+    def can_sniff(
+        self,
+        rx_pin_idx: int,
+        bitrate: int,
+        duration_s: float,
+        poll_interval_s: float,
+    ) -> list[tuple[float, int, bytes, bool, int]]:
+        import time
+        can = self._device.protocol.can
+        can.reset()
+        can.rateSet(bitrate)
+        can.rxSet(rx_pin_idx)
+        try:
+            frames: list[tuple[float, int, bytes, bool, int]] = []
+            start_t = time.monotonic()
+            deadline = start_t + duration_s
+            while time.monotonic() < deadline:
+                frame_id, ext, _remote, data, status = can.rx()
+                if status:
+                    ts = time.monotonic() - start_t
+                    frames.append((ts, int(frame_id), bytes(data), bool(ext), int(status)))
+                else:
+                    time.sleep(poll_interval_s)
+            return frames
+        finally:
+            can.reset()
