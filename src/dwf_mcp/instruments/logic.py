@@ -119,7 +119,7 @@ class Logic(Instrument):
         sample_rate_hz: float,
         buffer_size: int,
     ) -> dict[str, Any]:
-        self.device.allocator.claim("logic", pins)
+        self.device.allocator.claim("logic", ["digital_in"] + pins)
         self._config = None
         try:
             self.device.backend.logic_configure(
@@ -247,7 +247,7 @@ class Logic(Instrument):
             raise ValueError(
                 "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
             )
-        self.device.allocator.claim("logic", pins)
+        self.device.allocator.claim("logic", ["digital_in"] + pins)
         vcd_w: vcd_writer.VcdStreamWriter | None = None
         vcd_path: str | None = None
         try:
