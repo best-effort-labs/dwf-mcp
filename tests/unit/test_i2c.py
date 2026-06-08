@@ -93,6 +93,13 @@ def test_pullups_kept_for_sidecar(i2c: I2C) -> None:
     assert i2c._pullups is True  # type: ignore[attr-defined]
 
 
+def test_engine_conflict_blocks_second_instrument(i2c: I2C) -> None:
+    """Once i2c claims the i2c_engine virtual pin, no other instrument may claim it."""
+    i2c.configure(sda_pin="dio0", scl_pin="dio1", clock_hz=100_000)
+    with pytest.raises(PinAllocationError):
+        i2c.device.allocator.claim("another_instrument", ["i2c_engine", "dio5", "dio6"])
+
+
 def test_configure_backend_failure_releases_pins(i2c: I2C, monkeypatch) -> None:
     """If a backend call raises mid-configure, the pin claim must be rolled back
     and the instrument must remain unconfigured.
