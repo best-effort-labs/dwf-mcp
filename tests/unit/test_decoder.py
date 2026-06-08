@@ -14,7 +14,10 @@ from dwf_mcp.device import DwfDevice
 from dwf_mcp.devices.ad3 import AD3_RESOURCE_GROUPS
 from dwf_mcp.instruments.decoder import Decoder as DecoderInstrument
 from dwf_mcp.policy import SafetyPolicy
+from tests.unit.test_can_decoder import _can_bits, _samples_from_bits, _stuff
+from tests.unit.test_i2c_decoder import _i2c_samples
 from tests.unit.test_spi_decoder import _spi_samples
+from tests.unit.test_uart_decoder import _uart_samples
 
 
 @pytest.fixture
@@ -96,3 +99,86 @@ def test_decoder_spi_missing_sample_rate_returns_error(
 
     result = asyncio.run(decoder.spi(capture_path=str(npz_path), clk_pin="dio0", mosi_pin="dio1"))
     assert "error" in result
+
+
+def test_decoder_i2c_tool_writes_parquet(
+    decoder: DecoderInstrument, tmp_path: Path
+) -> None:
+    """decoder.i2c reads an npz + sidecar, writes a decoded parquet."""
+    import pyarrow.parquet as pq
+
+    samples = _i2c_samples([(0x50, b"\x01\x02", True)])
+    pins = ["dio0", "dio1"]
+    npz_path = _write_npz_with_sidecar(samples, pins, 1_000_000.0, tmp_path)
+
+    result = asyncio.run(decoder.i2c(
+        capture_path=str(npz_path), sda_pin="dio0", scl_pin="dio1",
+    ))
+    assert result["artifact_error"] is None
+    assert result["count"] == 1
+    assert result["error_count"] == 0
+    assert result["artifact_path"] is not None
+
+    table = pq.read_table(result["artifact_path"])
+    assert table.column("address")[0].as_py() == 0x50
+    assert table.column("type")[0].as_py() == "write"
+    assert table.column("data")[0].as_py() == b"\x01\x02"
+
+
+def test_decoder_i2c_missing_pin_returns_error(
+    decoder: DecoderInstrument, tmp_path: Path
+) -> None:
+    samples = _i2c_samples([(0x50, b"\x01", True)])
+    npz_path = _write_npz_with_sidecar(samples, ["dio0", "dio1"], 1_000_000.0, tmp_path)
+
+    result = asyncio.run(decoder.i2c(
+        capture_path=str(npz_path), sda_pin="dio0", scl_pin="dio5",  # dio5 not captured
+    ))
+    assert "error" in result
+
+
+def test_decoder_uart_tool_writes_parquet(
+    decoder: DecoderInstrument, tmp_path: Path
+) -> None:
+    """decoder.uart decodes a synthetic UART capture and writes a parquet."""
+    import pyarrow.parquet as pq
+
+    samples = _uart_samples(b"Hi!", baud=9600, sample_rate_hz=96000.0)
+    npz_path = _write_npz_with_sidecar(samples, ["dio0"], 96000.0, tmp_path)
+
+    result = asyncio.run(decoder.uart(
+        capture_path=str(npz_path), rx_pin="dio0", baud=9600,
+    ))
+    assert result["artifact_error"] is None
+    assert result["count"] == 3
+    assert result["error_count"] == 0
+    assert result["artifact_path"] is not None
+
+    table = pq.read_table(result["artifact_path"])
+    payload = b"".join(row.as_py() for row in table.column("data"))
+    assert payload == b"Hi!"
+
+
+def test_decoder_can_tool_writes_parquet(
+    decoder: DecoderInstrument, tmp_path: Path
+) -> None:
+    """decoder.can decodes a synthetic CAN frame and writes a parquet."""
+    import pyarrow.parquet as pq
+
+    bits = _stuff(_can_bits(0x123, b"\xDE\xAD"))
+    samples = _samples_from_bits(bits, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    npz_path = _write_npz_with_sidecar(samples, ["dio0"], 2_000_000.0, tmp_path)
+
+    result = asyncio.run(decoder.can(
+        capture_path=str(npz_path), rx_pin="dio0", bitrate=100_000,
+    ))
+    assert result["artifact_error"] is None
+    assert result["count"] == 1
+    assert result["error_count"] == 0
+    assert result["artifact_path"] is not None
+
+    table = pq.read_table(result["artifact_path"])
+    assert table.column("frame_id")[0].as_py() == 0x123
+    assert table.column("data")[0].as_py() == b"\xDE\xAD"
+    assert table.column("dlc")[0].as_py() == 2
+    assert table.column("crc_valid")[0].as_py() is True
