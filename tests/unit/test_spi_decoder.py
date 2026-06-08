@@ -19,7 +19,7 @@ def _spi_samples(
 
     Column layout: CLK=0, MOSI=1, MISO=2 (loopback = MOSI), CS=3 (active-low).
     Mode 0 (CPOL=0,CPHA=0): idle CLK=0, sample on rising edge.
-    Mode 3 (CPOL=1,CPHA=1): idle CLK=1, sample on rising edge.
+    Mode 3 (CPOL=1,CPHA=1): idle CLK=1, sample on falling edge (active phase entry).
     """
     cpol = mode >> 1
 
@@ -139,3 +139,19 @@ def test_lsb_first() -> None:
     decoder = SpiDecoder()
     txns = decoder.decode(samples, pin_map, sample_rate_hz=SAMPLE_RATE, mode=0, bit_order="lsb")
     assert txns[0].mosi == bytes([0x01])
+
+
+def test_mode1_single_byte() -> None:
+    samples, pin_map = _spi_samples([0x37], mode=1)
+    decoder = SpiDecoder()
+    txns = decoder.decode(samples, pin_map, sample_rate_hz=SAMPLE_RATE, mode=1)
+    assert len(txns) == 1
+    assert txns[0].mosi == bytes([0x37])
+
+
+def test_mode2_single_byte() -> None:
+    samples, pin_map = _spi_samples([0xC3], mode=2)
+    decoder = SpiDecoder()
+    txns = decoder.decode(samples, pin_map, sample_rate_hz=SAMPLE_RATE, mode=2)
+    assert len(txns) == 1
+    assert txns[0].mosi == bytes([0xC3])

@@ -8,12 +8,13 @@ from dwf_mcp.instruments.decoder.base import Decoder, SpiTransaction
 
 # (CPOL, CPHA) -> sample on rising edge?
 # Convention follows the test generator: active_clk = 1 - cpol.
-# Mode 0 (CPOL=0,CPHA=0): active CLK=1, sampled at rising (0→1). sample_on_rising=True.
-# Mode 3 (CPOL=1,CPHA=1): active CLK=0, sampled at falling (1→0). sample_on_rising=False.
+# Data is stable during the active phase; sampling occurs on entry into active.
+# CPOL=0 → active=HIGH → entry edge is RISING  → sample_on_rising=True  (modes 0 and 1)
+# CPOL=1 → active=LOW  → entry edge is FALLING → sample_on_rising=False (modes 2 and 3)
 _SAMPLE_ON_RISING: dict[tuple[int, int], bool] = {
     (0, 0): True,
-    (0, 1): False,
-    (1, 0): True,
+    (0, 1): True,   # fixed: CPOL=0 → active HIGH → rising edge
+    (1, 0): False,  # fixed: CPOL=1 → active LOW  → falling edge
     (1, 1): False,
 }
 
@@ -31,6 +32,8 @@ class SpiDecoder(Decoder):
         word_size: int = 8,
         **_: Any,
     ) -> list[SpiTransaction]:
+        if mode not in (0, 1, 2, 3):
+            raise ValueError(f"mode must be 0-3, got {mode!r}")
         cpol = mode >> 1
         cpha = mode & 1
         sample_on_rising = _SAMPLE_ON_RISING[(cpol, cpha)]
