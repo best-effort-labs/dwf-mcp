@@ -31,6 +31,14 @@ dwf-mcp
 
 Speaks MCP over stdio. Configure your LLM client (Claude Desktop, Claude Code, etc.) to launch it as a tool server.
 
+### Environment variables
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `DWF_BACKEND` | `pydwf` | Backend implementation. Set to `fake` for testing without hardware. |
+| `DWF_WORKSPACE` | (cwd) | Workspace directory. Capture artifacts (`.npz`, `.parquet`, `.vcd`) are written under `<workspace>/captures/`. If unset, falls back to the current working directory — useful to pin to `/tmp/dwf` when launched from an MCP client that has an arbitrary cwd. |
+| `DWF_ENABLE_VCD` | (autodetect) | Set to `1` to force VCD output writer on (requires `pip install dwf-mcp[vcd]`), `0` to disable. Default: enabled if `pyvcd` importable. |
+
 ## Tool surface (66 tools)
 
 | Group | Tools |

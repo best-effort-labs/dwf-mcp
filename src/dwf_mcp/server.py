@@ -211,6 +211,7 @@ def build_app(
     enable_vcd: bool | None = None,
 ) -> DwfMcpApp:
     backend_name = backend_name or os.environ.get("DWF_BACKEND", "pydwf")
+    workspace = workspace or os.environ.get("DWF_WORKSPACE")
     backend = _build_backend(backend_name)
     allocator = PinAllocator(resource_groups=AD3_RESOURCE_GROUPS)
     device = DwfDevice(
