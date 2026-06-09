@@ -59,14 +59,18 @@ class CanDecoder(Decoder):
 
     protocol_name: ClassVar[str] = "can"
 
-    def decode(  # type: ignore[override]
+    # Worst-case CAN frame length: extended ID + 8 data bytes + every
+    # possible stuff bit through the CRC region + post-CRC fields + IFS.
+    # 200 bit-times is comfortably above the maximum.
+    _WORST_CASE_FRAME_BITS: ClassVar[int] = 200
+
+    def init(  # type: ignore[override]
         self,
-        samples: np.ndarray,
         pin_map: dict[str, int],
         sample_rate_hz: float,
         bitrate: int = 100_000,
         **_unused: Any,
-    ) -> list[CanFrame]:
+    ) -> None:
         if sample_rate_hz <= 0:
             raise ValueError(
                 f"sample_rate_hz must be positive, got {sample_rate_hz}"
@@ -79,20 +83,76 @@ class CanDecoder(Decoder):
                 f"CAN decode requires >=8x oversampling, got {samples_per_bit:.1f}x "
                 f"(sample_rate_hz={sample_rate_hz}, bitrate={bitrate})"
             )
-        sample_point = int(round(samples_per_bit * 0.75))
+        self._rx_col = pin_map["rx"]
+        self._sample_rate_hz = sample_rate_hz
+        self._bitrate = bitrate
+        self._samples_per_bit = samples_per_bit
+        self._sample_point = int(round(samples_per_bit * 0.75))
+        self._consumed_total = 0
+        self._carry = np.zeros(0, dtype=np.uint8)
 
-        rx = samples[:, pin_map["rx"]].astype(np.uint8)
-        frames: list[CanFrame] = []
+    def feed(self, samples: np.ndarray) -> list[CanFrame]:  # type: ignore[override]
+        chunk_rx = samples[:, self._rx_col].astype(np.uint8)
+        if len(self._carry):
+            rx = np.concatenate([self._carry, chunk_rx])
+        else:
+            rx = chunk_rx
+        frames, consumed = self._scan(rx)
+        self._consumed_total += consumed
+        self._carry = rx[consumed:].copy()
+        return frames
+
+    def finalize(self) -> list[CanFrame]:  # type: ignore[override]
+        # No more samples coming — make a best-effort decode of anything
+        # still in the carry, treating OOB sample positions as recessive
+        # (which is how the pre-streaming one-shot decode behaved at the
+        # end of its buffer). This is what makes the streaming wrapper
+        # equivalent to one-shot for small buffers that don't have the
+        # worst-case 200-bit headroom past every SOF.
+        rx = self._carry
+        self._carry = np.zeros(0, dtype=np.uint8)
+        if len(rx) == 0:
+            return []
+        frames, consumed = self._scan(rx, allow_partial=True)
+        self._consumed_total += consumed
+        return frames
+
+    def _scan(
+        self, rx: np.ndarray, allow_partial: bool = False,
+    ) -> tuple[list[CanFrame], int]:
+        """Scan ``rx`` for complete CAN frames. Returns (frames, consumed)
+        where rx[consumed:] is the tail to carry into the next feed call.
+
+        When ``allow_partial`` is True (set by ``finalize``), the worst-case
+        headroom check is skipped — sample_bit's OOB recessive return makes
+        any truncated trailing frame decode as if padded with idle, matching
+        the pre-streaming one-shot behavior.
+        """
+        samples_per_bit = self._samples_per_bit
+        sample_point = self._sample_point
+        sample_rate_hz = self._sample_rate_hz
+        base_ts = self._consumed_total / sample_rate_hz
+        worst_case_samples = int(samples_per_bit * self._WORST_CASE_FRAME_BITS)
         n = len(rx)
+
+        frames: list[CanFrame] = []
         i = 0
+        consumed = 0
         while i < n:
-            # Scan to the next dominant (SOF candidate).
             while i < n and rx[i] == 1:
                 i += 1
             if i >= n:
+                consumed = n
                 break
             sof_i = i
-            ts = sof_i / sample_rate_hz
+            if not allow_partial and n - sof_i < worst_case_samples:
+                # Found a SOF candidate but a worst-case frame wouldn't fit
+                # in the remaining buffer. Carry from sof_i and wait for
+                # more samples on a future feed() call (or for finalize()
+                # to drain with allow_partial=True).
+                consumed = sof_i
+                break
+            ts = base_ts + sof_i / sample_rate_hz
 
             def sample_bit(bit_index: int, _base: int = sof_i) -> int:
                 idx = _base + int(samples_per_bit * bit_index) + sample_point
@@ -115,21 +175,15 @@ class CanDecoder(Decoder):
                     error=True,
                     error_detail=str(exc),
                 ))
-                # Skip a conservative number of bit-times so we resync past
-                # the partial frame and look for the next dominant edge.
                 i = sof_i + max(1, int(samples_per_bit * 16))
+                consumed = min(i, n)
                 continue
 
-            # Advance past every bit the parser actually read (which already
-            # accounts for stuff bits in the SOF→CRC region), plus the
-            # post-CRC fields (CRC delim + ACK + ACK delim + 7 EOF + 3 IFS).
-            # An extra few bit-times of slack absorbs any spurious stuff
-            # bits a noisy / non-compliant transmitter may emit in EOF.
-            trailing = 1 + 1 + 1 + 7 + 3 + 4  # +4 slack
+            trailing = 1 + 1 + 1 + 7 + 3 + 4  # CRC delim + ACK + ACK delim + EOF + IFS + slack
             advance = max(1, int(samples_per_bit * (bits_through_crc + trailing)))
             i = sof_i + advance
-
-        return frames
+            consumed = min(i, n)
+        return frames, consumed
 
 
 class _CanParseError(Exception):

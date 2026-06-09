@@ -155,3 +155,48 @@ def test_mode2_single_byte() -> None:
     txns = decoder.decode(samples, pin_map, sample_rate_hz=SAMPLE_RATE, mode=2)
     assert len(txns) == 1
     assert txns[0].mosi == bytes([0xC3])
+
+
+# --- Streaming API tests --------------------------------------------------
+
+def test_streaming_single_chunk_matches_oneshot() -> None:
+    samples, _ = _spi_samples([0xA5, 0x5A], mode=0)
+    one_shot = SpiDecoder().decode(
+        samples, {"clk": 0, "mosi": 1, "miso": 2, "cs": 3},
+        sample_rate_hz=10_000_000.0, mode=0,
+    )
+    streaming = SpiDecoder()
+    streaming.init(
+        {"clk": 0, "mosi": 1, "miso": 2, "cs": 3},
+        sample_rate_hz=10_000_000.0, mode=0,
+    )
+    out = streaming.feed(samples)
+    out.extend(streaming.finalize())
+    assert len(out) == len(one_shot)
+    for a, b in zip(out, one_shot):
+        assert a.mosi == b.mosi
+        assert a.word_index == b.word_index
+        assert abs(a.timestamp_s - b.timestamp_s) < 1e-9
+
+
+def test_streaming_arbitrary_chunk_boundaries() -> None:
+    """Multi-word SPI buffer cut at varied positions yields identical words."""
+    samples, _ = _spi_samples([0xA5, 0x5A, 0xFF, 0x00], mode=0)
+    expected = SpiDecoder().decode(
+        samples, {"clk": 0, "mosi": 1, "miso": 2, "cs": 3},
+        sample_rate_hz=10_000_000.0, mode=0,
+    )
+    n = samples.shape[0]
+    for cut in (n // 5, n // 4, n // 3, n // 2, 2 * n // 3, 3 * n // 4):
+        decoder = SpiDecoder()
+        decoder.init(
+            {"clk": 0, "mosi": 1, "miso": 2, "cs": 3},
+            sample_rate_hz=10_000_000.0, mode=0,
+        )
+        out = decoder.feed(samples[:cut])
+        out.extend(decoder.feed(samples[cut:]))
+        out.extend(decoder.finalize())
+        assert len(out) == len(expected), f"cut={cut} count mismatch"
+        for a, b in zip(out, expected):
+            assert a.mosi == b.mosi, f"cut={cut} mosi mismatch"
+            assert a.word_index == b.word_index

@@ -285,3 +285,42 @@ def test_can_crc15_known_vector() -> None:
     expected = 0x6858
     actual = can_crc15(bits_after_sof)
     assert actual == expected, f"CRC15(0x123/empty) expected {expected:#06x}, got {actual:#06x}"
+
+
+# --- Streaming API tests --------------------------------------------------
+
+def test_streaming_single_chunk_matches_oneshot() -> None:
+    bits = _stuff(_can_bits(0x123, b"\xDE\xAD"))
+    samples = _samples_from_bits(bits, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    one_shot = CanDecoder().decode(samples, {"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+    streaming = CanDecoder()
+    streaming.init({"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+    out = streaming.feed(samples)
+    out.extend(streaming.finalize())
+    assert len(out) == len(one_shot)
+    for a, b in zip(out, one_shot):
+        assert a.frame_id == b.frame_id
+        assert a.data == b.data
+        assert abs(a.timestamp_s - b.timestamp_s) < 1e-9
+
+
+def test_streaming_arbitrary_chunk_boundaries() -> None:
+    """Multi-frame buffer cut at varied positions yields identical frames."""
+    bits1 = _stuff(_can_bits(0x100, b"\x11"))
+    bits2 = _stuff(_can_bits(0x200, b"\x22\x33"))
+    bits3 = _stuff(_can_bits(0x1A2B3C4, b"\x44", extended=True))
+    s1 = _samples_from_bits(bits1, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    s2 = _samples_from_bits(bits2, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    s3 = _samples_from_bits(bits3, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    samples = np.concatenate([s1, s2, s3], axis=0)
+    expected = CanDecoder().decode(samples, {"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+    expected_good = [(f.extended, f.frame_id) for f in expected if not f.error]
+    n = samples.shape[0]
+    for cut in (n // 5, n // 4, n // 3, n // 2, 2 * n // 3):
+        decoder = CanDecoder()
+        decoder.init({"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+        out = decoder.feed(samples[:cut])
+        out.extend(decoder.feed(samples[cut:]))
+        out.extend(decoder.finalize())
+        got_good = [(f.extended, f.frame_id) for f in out if not f.error]
+        assert got_good == expected_good, f"cut={cut} ids {got_good} != {expected_good}"

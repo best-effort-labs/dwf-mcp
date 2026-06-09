@@ -13,59 +13,94 @@ from dwf_mcp.instruments.decoder.base import Decoder, SpiTransaction
 # CPOL=1 → active=LOW  → entry edge is FALLING → sample_on_rising=False (modes 2 and 3)
 _SAMPLE_ON_RISING: dict[tuple[int, int], bool] = {
     (0, 0): True,
-    (0, 1): True,   # fixed: CPOL=0 → active HIGH → rising edge
-    (1, 0): False,  # fixed: CPOL=1 → active LOW  → falling edge
+    (0, 1): True,
+    (1, 0): False,
     (1, 1): False,
 }
 
 
 class SpiDecoder(Decoder):
+    """Software SPI decoder for raw DigitalIn captures.
+
+    Supports streaming via ``init`` / ``feed`` / ``finalize`` (process chunks
+    as they arrive) or one-shot via ``decode(samples)``.
+    """
+
     protocol_name: ClassVar[str] = "spi"
 
-    def decode(  # type: ignore[override]
+    def init(  # type: ignore[override]
         self,
-        samples: np.ndarray,
         pin_map: dict[str, int],
         sample_rate_hz: float,
         mode: int = 0,
         bit_order: str = "msb",
         word_size: int = 8,
         **_: Any,
-    ) -> list[SpiTransaction]:
+    ) -> None:
         if mode not in (0, 1, 2, 3):
             raise ValueError(f"mode must be 0-3, got {mode!r}")
+        if sample_rate_hz <= 0:
+            raise ValueError(f"sample_rate_hz must be positive, got {sample_rate_hz}")
+        if word_size < 1 or word_size > 32:
+            raise ValueError(f"word_size must be 1..32, got {word_size}")
+        if bit_order not in ("msb", "lsb"):
+            raise ValueError(f"bit_order must be 'msb' or 'lsb', got {bit_order!r}")
+
+        self._sample_rate_hz = sample_rate_hz
         cpol = mode >> 1
         cpha = mode & 1
-        sample_on_rising = _SAMPLE_ON_RISING[(cpol, cpha)]
+        self._sample_on_rising = _SAMPLE_ON_RISING[(cpol, cpha)]
+        self._word_size = word_size
+        self._bit_order = bit_order
+        self._clk_col = pin_map["clk"]
+        self._mosi_col = pin_map["mosi"]
+        self._miso_col: int | None = pin_map.get("miso")
+        self._cs_col: int | None = pin_map.get("cs")
+        # Idle assumptions for the very first sample of the stream.
+        # CLK starts at its inactive level (matches the no-traffic idle).
+        # CS starts inactive (HIGH).
+        self._prev_clk = 1 if cpol == 1 else 0
+        self._prev_cs = 1
+        # In-progress word state.
+        self._mosi_bits: list[int] = []
+        self._miso_bits: list[int] = []
+        self._word_index = 0
+        # Position tracking.
+        self._consumed_total = 0
 
-        clk = samples[:, pin_map["clk"]]
-        mosi = samples[:, pin_map["mosi"]]
-        miso_col = pin_map.get("miso")
-        cs_col = pin_map.get("cs")
-        miso = samples[:, miso_col] if miso_col is not None else None
-        cs = samples[:, cs_col] if cs_col is not None else None
+    def feed(self, samples: np.ndarray) -> list[SpiTransaction]:  # type: ignore[override]
+        n = len(samples)
+        if n == 0:
+            return []
+        clk = samples[:, self._clk_col]
+        mosi = samples[:, self._mosi_col]
+        miso = samples[:, self._miso_col] if self._miso_col is not None else None
+        cs = samples[:, self._cs_col] if self._cs_col is not None else None
 
         transactions: list[SpiTransaction] = []
-        mosi_bits: list[int] = []
-        miso_bits: list[int] = []
-        word_index = 0
+        prev_clk = self._prev_clk
+        prev_cs = self._prev_cs
+        sample_on_rising = self._sample_on_rising
+        word_size = self._word_size
+        has_miso = miso is not None
+        has_cs = cs is not None
 
-        n = len(samples)
-        for i in range(1, n):
-            prev_clk = int(clk[i - 1])
+        for i in range(n):
             curr_clk = int(clk[i])
 
-            # CS deassertion mid-word check
-            if cs is not None and mosi_bits:
-                prev_cs_active = cs[i - 1] == 0
+            # CS deassertion mid-word check (only meaningful if a word is
+            # in progress).
+            if has_cs and self._mosi_bits:
+                prev_cs_active = prev_cs == 0
                 curr_cs_active = cs[i] == 0
                 if prev_cs_active and not curr_cs_active:
                     mosi_word, miso_word = _build_words(
-                        mosi_bits, miso_bits, word_size, bit_order, miso is not None
+                        self._mosi_bits, self._miso_bits,
+                        word_size, self._bit_order, has_miso,
                     )
                     transactions.append(SpiTransaction(
-                        timestamp_s=i / sample_rate_hz,
-                        word_index=word_index,
+                        timestamp_s=(self._consumed_total + i) / self._sample_rate_hz,
+                        word_index=self._word_index,
                         mosi=mosi_word,
                         miso=miso_word,
                         cs_active=True,
@@ -73,39 +108,54 @@ class SpiDecoder(Decoder):
                         error=True,
                         error_detail="CS deasserted mid-word",
                     ))
-                    word_index += 1
-                    mosi_bits.clear()
-                    miso_bits.clear()
+                    self._word_index += 1
+                    self._mosi_bits.clear()
+                    self._miso_bits.clear()
+                    prev_clk = curr_clk
+                    prev_cs = int(cs[i])
                     continue
 
-            # CLK edge
             rising = prev_clk == 0 and curr_clk == 1
             falling = prev_clk == 1 and curr_clk == 0
             if (sample_on_rising and rising) or (not sample_on_rising and falling):
-                cs_active = bool(cs[i] == 0) if cs is not None else True
-                if not cs_active and cs is not None:
-                    continue
-                mosi_bits.append(int(mosi[i]))
-                if miso is not None:
-                    miso_bits.append(int(miso[i]))
+                cs_active = bool(cs[i] == 0) if has_cs else True
+                if cs_active or not has_cs:
+                    self._mosi_bits.append(int(mosi[i]))
+                    if has_miso:
+                        self._miso_bits.append(int(miso[i]))
 
-                if len(mosi_bits) == word_size:
-                    mosi_word, miso_word = _build_words(
-                        mosi_bits, miso_bits, word_size, bit_order, miso is not None
-                    )
-                    transactions.append(SpiTransaction(
-                        timestamp_s=i / sample_rate_hz,
-                        word_index=word_index,
-                        mosi=mosi_word,
-                        miso=miso_word,
-                        cs_active=cs_active,
-                        cs_error=False,
-                    ))
-                    word_index += 1
-                    mosi_bits.clear()
-                    miso_bits.clear()
+                    if len(self._mosi_bits) == word_size:
+                        mosi_word, miso_word = _build_words(
+                            self._mosi_bits, self._miso_bits,
+                            word_size, self._bit_order, has_miso,
+                        )
+                        transactions.append(SpiTransaction(
+                            timestamp_s=(self._consumed_total + i) / self._sample_rate_hz,
+                            word_index=self._word_index,
+                            mosi=mosi_word,
+                            miso=miso_word,
+                            cs_active=cs_active,
+                            cs_error=False,
+                        ))
+                        self._word_index += 1
+                        self._mosi_bits.clear()
+                        self._miso_bits.clear()
 
+            prev_clk = curr_clk
+            if has_cs:
+                prev_cs = int(cs[i])
+
+        self._prev_clk = prev_clk
+        self._prev_cs = prev_cs
+        self._consumed_total += n
         return transactions
+
+    def finalize(self) -> list[SpiTransaction]:  # type: ignore[override]
+        # Drop any partial word at end of stream. SPI words are atomic; a
+        # truncated word would mislead callers more than help.
+        self._mosi_bits.clear()
+        self._miso_bits.clear()
+        return []
 
 
 def _build_words(
