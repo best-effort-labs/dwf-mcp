@@ -164,6 +164,66 @@ async def test_call_tool_wraps_safety_violation(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_call_tool_wraps_instrument_not_configured(tmp_path) -> None:
+    """InstrumentNotConfigured raised by an instrument method (e.g. i2c.write
+    before i2c.configure) is converted to an error dict, not propagated."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    # Skip i2c.configure; go straight to i2c.write.
+    result = await app.call_tool("i2c.write", {"address": 0x42, "data": [0x00]})
+    assert "error" in result
+    assert result["error"]["type"] == "InstrumentNotConfigured"
+
+
+class _RaisingInstrument(Instrument):
+    """Test-only instrument whose only tool raises a non-mapped exception."""
+    name = "raising_test"
+    tools: ClassVar[dict[str, Any]] = {
+        "boom": ("boom", {"type": "object", "properties": {}}),
+    }
+
+    def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
+        pass
+
+    def boom(self) -> dict[str, Any]:
+        raise ValueError("not in _ERROR_TYPES")
+
+    def release(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_call_tool_propagates_unmapped_exception(tmp_path) -> None:
+    """Exceptions not in _ERROR_TYPES (e.g. ValueError from buggy instrument
+    code) propagate to the caller rather than being silently swallowed."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    app.registry.register(_RaisingInstrument)
+    app._tools["raising_test.boom"] = app._make_instrument_handler("raising_test", "boom")
+    app.instruments["raising_test"] = _RaisingInstrument(device=app.device, artifacts=app.artifacts)
+    with pytest.raises(ValueError, match="not in _ERROR_TYPES"):
+        await app.call_tool("raising_test.boom", {})
+
+
+@pytest.mark.asyncio
+async def test_waveforms_list_pins_returns_pin_inventory(tmp_path) -> None:
+    """After waveforms.open, list_pins returns the full pin inventory with
+    nothing claimed yet."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    result = await app.call_tool("waveforms.list_pins", {})
+    assert "error" not in result
+    assert "all_pins" in result
+    assert "claimed" in result
+    # No instruments have claimed yet, so claimed list is empty.
+    assert result["claimed"] == {}
+    # Inventory contains at least the AD3 DIO pins.
+    assert any(p.startswith("dio") for p in result["all_pins"])
+
+
+@pytest.mark.asyncio
 async def test_handler_awaits_coroutine(tmp_path):
     from dwf_mcp.server import build_app
     app = build_app(backend_name="fake", workspace=str(tmp_path))
