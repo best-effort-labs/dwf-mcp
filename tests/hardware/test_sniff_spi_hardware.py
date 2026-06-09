@@ -1,16 +1,30 @@
 """SPI sniff hardware test.
 
-Wiring:
-  DIO0 = CLK  (SPI master output)
-  DIO1 = MOSI (SPI master output, looped to DIO2 via Jumperless)
-  DIO2 = MISO (loopback from DIO1)
-  DIO3 = CS   (SPI master output, active-low)
+CURRENTLY SKIPPED — AD3 hardware limitation.
 
-sniff.spi_start uses claim_observe (DigitalIn), which does NOT conflict with
-spi.configure (protocol.spi engine). Both can run simultaneously.
+The original test premise was that ``sniff.spi_start`` (DigitalIn observer)
+could coexist with ``spi.configure`` + ``spi.transfer`` (protocol.spi engine)
+because the AD3 docs treat them as independent hardware blocks. Empirically,
+``protocol.spi.writeRead`` internally uses DigitalIn to sample MISO, so
+calling ``spi.transfer`` resets the DigitalIn record-mode state we set up
+in ``sniff.spi_start``. The observer ends up with zero samples.
 
-Run:
-  pytest tests/hardware/test_sniff_spi_hardware.py -v -m hardware
+Diagnostic evidence (2026-06-08):
+  - DigitalIn record mode captures samples cleanly when no protocol.spi call
+    is made (no `lost`/`reset` after stimulus).
+  - As soon as ``spi.transfer`` runs, the next ``logic_record_status`` returns
+    ``(available=0, lost=0, remaining=0)`` — full reset of DigitalIn state.
+
+To actually exercise ``sniff.spi`` on hardware, route an EXTERNAL SPI master
+(another microcontroller, USB-SPI dongle, etc.) into DIO0..DIO3 and use only
+``sniff.spi_*`` on the AD3. Same pattern as ``test_sniff_can_hardware.py``,
+which is skipped pending an external CAN transceiver.
+
+Wiring (if/when external master available):
+  DIO0 = CLK  (external master output)
+  DIO1 = MOSI (external master output)
+  DIO2 = MISO (external slave output, can be tied LOW for passive sniff)
+  DIO3 = CS   (external master output, active-low)
 """
 from __future__ import annotations
 
@@ -43,6 +57,10 @@ def open_device(app):
 @pytest.mark.jumperless(connections={"mosi_miso_loop": ("DIO1", "DIO2")})
 async def test_sniff_spi_captures_active_transfer(app, tmp_path: Path) -> None:
     """sniff.spi_start + spi.transfer + sniff.spi_stop decodes known data."""
+    pytest.skip(
+        "AD3 protocol.spi.writeRead resets DigitalIn state — see module docstring. "
+        "Requires external SPI master to exercise."
+    )
     await app.call_tool("spi.configure", {
         "clk_pin": "dio0", "mosi_pin": "dio1", "miso_pin": "dio2",
         "cs_pin": "dio3", "mode": 0, "frequency_hz": 100_000,
@@ -78,6 +96,10 @@ async def test_sniff_spi_captures_active_transfer(app, tmp_path: Path) -> None:
 @pytest.mark.jumperless(connections={"mosi_miso_loop": ("DIO1", "DIO2")})
 async def test_sniff_spi_lost_samples_zero(app, tmp_path: Path) -> None:
     """Verify no samples are lost during a short capture."""
+    pytest.skip(
+        "AD3 protocol.spi.writeRead resets DigitalIn state — see module docstring. "
+        "Requires external SPI master to exercise."
+    )
     await app.call_tool("spi.configure", {
         "clk_pin": "dio0", "mosi_pin": "dio1", "miso_pin": "dio2",
         "cs_pin": "dio3", "mode": 0, "frequency_hz": 100_000,
