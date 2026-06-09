@@ -36,16 +36,16 @@ def jumperless(pytestconfig: pytest.Config):
         yield None
         return
     try:
-        from jumperless import Jumperless, find_jumperless_ports
+        from jlv5_harness import Harness, find_ports
     except ImportError:
         yield None
         return
     try:
-        ports = find_jumperless_ports()
+        ports = find_ports()
         if len(ports) < 3 or pytestconfig.getoption("--jumperless-manual"):
             yield None
             return
-        j = Jumperless()
+        j = Harness()
     except Exception as exc:
         warnings.warn(
             f"Jumperless probe/open failed ({exc!r}), falling back to manual prompts",
