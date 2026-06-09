@@ -97,52 +97,26 @@ class Decoder(Instrument):
     ) -> dict[str, Any]:
         from dwf_mcp.instruments.decoder.spi import SpiDecoder
 
-        npz_path = Path(capture_path)
-        sidecar_path = npz_path.with_suffix(".json")
+        loaded = self._load_capture(
+            capture_path, {"clk": clk_pin, "mosi": mosi_pin},
+        )
+        if "error" in loaded:
+            return loaded
 
-        # Load sidecar for pin list and sample_rate_hz
-        try:
-            sidecar = json.loads(sidecar_path.read_text())
-        except Exception as exc:
-            return {"error": f"cannot read sidecar {sidecar_path}: {exc}"}
-
-        config = sidecar.get("config", sidecar.get("summary", {}))
-        captured_pins: list[str] = config.get("pins", [])
-        sample_rate_hz = config.get("sample_rate_hz")
-
-        if sample_rate_hz is None:
-            return {"error": "sidecar missing sample_rate_hz; cannot compute timestamps"}
-
-        # Validate requested pins exist in capture
-        for label, pin in [("clk_pin", clk_pin), ("mosi_pin", mosi_pin)]:
+        # Optional pins are validated and added to pin_map manually.
+        captured_pins = loaded["captured_pins"]
+        pin_map = loaded["pin_map"]
+        for label, pin in [("miso_pin", miso_pin), ("cs_pin", cs_pin)]:
+            if pin is None:
+                continue
             if pin not in captured_pins:
                 return {"error": f"{label}={pin!r} was not captured; available: {captured_pins}"}
-        if miso_pin and miso_pin not in captured_pins:
-            return {"error": f"miso_pin={miso_pin!r} was not captured; available: {captured_pins}"}
-        if cs_pin and cs_pin not in captured_pins:
-            return {"error": f"cs_pin={cs_pin!r} was not captured; available: {captured_pins}"}
-
-        # Build (n_samples, 16) array from npz columns
-        data = np.load(npz_path)
-        n = len(data[captured_pins[0]])
-        samples = np.zeros((n, 16), dtype=np.uint8)
-        for pin in captured_pins:
-            col = int(pin[3:])  # "dio3" → 3
-            samples[:, col] = data[pin]
-
-        pin_map: dict[str, int] = {
-            "clk": int(clk_pin[3:]),
-            "mosi": int(mosi_pin[3:]),
-        }
-        if miso_pin:
-            pin_map["miso"] = int(miso_pin[3:])
-        if cs_pin:
-            pin_map["cs"] = int(cs_pin[3:])
+            pin_map[label[:-4]] = int(pin[3:])  # "miso_pin" → "miso"
 
         decoder = SpiDecoder()
         txns = decoder.decode(
-            samples, pin_map,
-            sample_rate_hz=float(sample_rate_hz),
+            loaded["samples"], pin_map,
+            sample_rate_hz=loaded["sample_rate_hz"],
             mode=mode, bit_order=bit_order, word_size=word_size,
         )
         error_count = sum(1 for t in txns if t.error)
@@ -157,7 +131,7 @@ class Decoder(Instrument):
                     "capture_path": capture_path, "clk_pin": clk_pin,
                     "mosi_pin": mosi_pin, "miso_pin": miso_pin, "cs_pin": cs_pin,
                     "mode": mode, "bit_order": bit_order, "word_size": word_size,
-                    "sample_rate_hz": sample_rate_hz,
+                    "sample_rate_hz": loaded["sample_rate_hz"],
                 },
                 output_path=Path(output_path) if output_path else None,
             )
