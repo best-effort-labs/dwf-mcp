@@ -8,13 +8,16 @@ from dwf_mcp.instruments.decoder.i2c import I2cDecoder
 
 
 def _i2c_samples(
-    transactions: list[tuple[int, bytes, bool]],  # (addr_7bit, data, write)
+    transactions: list[tuple[int, bytes, bool]],  # (addr, data, write)
     sample_rate_hz: float = 1_000_000.0,
     clock_hz: float = 100_000.0,
     nak_on_addr: bool = False,
+    addr_bits: int = 7,
 ) -> np.ndarray:
     """Generate (N, 16) uint8 samples of standard I2C on cols 0 (SDA) and 1 (SCL).
-    Both lines start HIGH (idle). Address is sent as (addr << 1) | (0 for write).
+    Both lines start HIGH (idle). When ``addr_bits=10``, each transaction's
+    address is sent as the 10-bit reserved pattern ``11110_A9_A8_R/W`` followed
+    by the low 8 address bits.
     """
     sda: list[int] = []
     scl: list[int] = []
@@ -30,12 +33,16 @@ def _i2c_samples(
         # START: SDA falls while SCL high
         hold(1, 1, half)
         hold(0, 1, half)
-        # Send address byte (MSB first). On writes the master also sends data
-        # bytes; on reads the slave drives the data bytes onto SDA after the
-        # address ACK. From the bus-observer's perspective the bit pattern is
-        # identical, so we serialize address + data uniformly.
-        addr_byte = (addr << 1) | (0 if write else 1)
-        bytes_to_send = [addr_byte] + list(data)
+        # Build the address-byte preamble. For 7-bit: one byte. For 10-bit:
+        # two bytes (high = 11110_A9_A8_RW, low = A7..A0).
+        if addr_bits == 10:
+            a98 = (addr >> 8) & 0x03
+            high_addr_byte = 0xF0 | (a98 << 1) | (0 if write else 1)
+            low_addr_byte = addr & 0xFF
+            bytes_to_send = [high_addr_byte, low_addr_byte] + list(data)
+        else:
+            addr_byte = (addr << 1) | (0 if write else 1)
+            bytes_to_send = [addr_byte] + list(data)
         last_data_idx = len(bytes_to_send) - 1
         for byte_idx, byte in enumerate(bytes_to_send):
             for bit_idx in range(8):
@@ -44,13 +51,15 @@ def _i2c_samples(
                 hold(bit, 1, samples_per_bit)
                 hold(bit, 0, half)
             # ACK/NAK slot.
-            #   Address byte: slave ACKs (unless nak_on_addr is set).
+            #   Address byte(s): slave ACKs (unless nak_on_addr is set,
+            #     in which case ONLY the very first address byte NAKs).
             #   Write data bytes: slave ACKs every byte.
             #   Read data bytes: master ACKs every byte except the last,
             #     which it NAKs to signal "no more bytes".
-            is_addr_byte = (byte_idx == 0)
+            n_addr_bytes = 2 if addr_bits == 10 else 1
+            is_addr_byte = byte_idx < n_addr_bytes
             if is_addr_byte:
-                nak = nak_on_addr
+                nak = nak_on_addr and byte_idx == 0
             elif write:
                 nak = False
             else:
@@ -120,6 +129,63 @@ def test_decode_read_transaction() -> None:
     assert txns[0].data == b"\xAB\xCD"
     assert txns[0].error is False
     assert txns[0].error_detail is None
+
+
+def test_decode_10bit_write_transaction() -> None:
+    """10-bit address write: 11110_A9_A8_0, then A7..A0, then data."""
+    addr10 = 0x123  # A9..A0 = 0b01_0010_0011
+    samples = _i2c_samples(
+        [(addr10, b"\xAB\xCD", True)], addr_bits=10,
+    )
+    decoder = I2cDecoder()
+    txns = decoder.decode(samples, {"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    assert len(txns) == 1
+    assert txns[0].address == 0x123
+    assert txns[0].address_bits == 10
+    assert txns[0].type == "write"
+    assert txns[0].data == b"\xAB\xCD"
+    assert txns[0].error is False
+
+
+def test_decode_10bit_max_address() -> None:
+    """10-bit address 0x3FF (all 10 bits set) decodes correctly."""
+    samples = _i2c_samples([(0x3FF, b"\x42", True)], addr_bits=10)
+    decoder = I2cDecoder()
+    txns = decoder.decode(samples, {"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    assert txns[0].address == 0x3FF
+    assert txns[0].address_bits == 10
+    assert txns[0].data == b"\x42"
+
+
+def test_decode_10bit_nak_on_high_address_byte() -> None:
+    """NAK on the high address byte of a 10-bit write reports as
+    nak_at_byte=0 with detail 'nak on address byte (high)'."""
+    samples = _i2c_samples(
+        [(0x123, b"", True)], addr_bits=10, nak_on_addr=True,
+    )
+    decoder = I2cDecoder()
+    txns = decoder.decode(samples, {"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    # With NAK on the high address byte, the master would normally stop —
+    # but our generator still emits the rest of the bytes. The decoder
+    # records the NAK on the address byte either way.
+    assert len(txns) == 1
+    assert txns[0].address_bits == 10
+    assert txns[0].nak_at_byte == 0
+    assert txns[0].error_detail == "nak on address byte (high)"
+    assert txns[0].error is True
+
+
+def test_decode_mixes_7bit_and_10bit_writes() -> None:
+    """A 7-bit and a 10-bit write back-to-back decode with the correct
+    address_bits set on each."""
+    samples_7bit = _i2c_samples([(0x50, b"\x11", True)])
+    samples_10bit = _i2c_samples([(0x123, b"\x22", True)], addr_bits=10)
+    combined = np.concatenate([samples_7bit, samples_10bit], axis=0)
+    decoder = I2cDecoder()
+    txns = decoder.decode(combined, {"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    assert len(txns) == 2
+    assert txns[0].address == 0x50 and txns[0].address_bits == 7
+    assert txns[1].address == 0x123 and txns[1].address_bits == 10
 
 
 def test_decode_rejects_zero_sample_rate() -> None:

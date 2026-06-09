@@ -11,15 +11,24 @@ from dwf_mcp.instruments.decoder.base import Decoder, I2cTransaction
 class I2cDecoder(Decoder):
     """Software I2C decoder for raw DigitalIn captures.
 
-    Handles standard 7-bit addressing, START/STOP framing, and per-byte
+    Handles 7-bit and 10-bit addressing, START/STOP framing, and per-byte
     ACK/NAK sampling. The decoder samples SDA on each SCL rising edge,
     accumulates 8 data bits, then samples the 9th bit as ACK (0) or NAK (1).
 
+    10-bit addressing detection: when the first byte of a transaction
+    matches the reserved pattern ``11110xxR``, the byte's A9/A8 bits plus
+    the subsequent byte (A7..A0) form the 10-bit address. ``address_bits``
+    in the emitted transaction reflects 7 or 10 accordingly. 10-bit READ
+    transactions require a repeated-START sequence (write address bytes,
+    repeated START, read directive) — see "Repeated START" below.
+
     Limitations:
-        - 10-bit addressing is not supported (Stage 5 out-of-scope).
         - Repeated START is not handled — combined transactions (write
           register, repeated START, read data) emit only the second half.
-          Capture each transaction segment separately if you need both.
+          As a consequence, 10-bit reads cannot be fully decoded since the
+          read directive after repeated START carries only A9/A8, not the
+          full address. Capture each transaction segment separately if you
+          need both halves.
         - Clock stretching is not explicitly modelled but is tolerated since
           decoding is edge-driven rather than timing-driven.
     """
@@ -112,6 +121,27 @@ def _finalize_i2c(
             data=b"", nak_at_byte=None, error=True,
             error_detail="incomplete transaction (no address byte)",
         )
+
+    # 10-bit address pattern: first byte is 11110_A9_A8_R/W, second byte
+    # is A7..A0. Only the write direction is fully decodable from a single
+    # START/STOP frame; 10-bit reads need a repeated START which we don't
+    # detect, so the read variant falls through to 7-bit handling (it will
+    # have an unhelpful address but at least won't be silently misreported).
+    is_10bit_write = (
+        (addr_byte & 0xF8) == 0xF0
+        and (addr_byte & 1) == 0
+        and len(data_bytes) >= 1
+    )
+    if is_10bit_write:
+        a98 = (addr_byte >> 1) & 0x03
+        a70 = data_bytes[0]
+        return _finalize_10bit_write(
+            address=(a98 << 8) | a70,
+            payload=data_bytes[1:],
+            nak_idx=nak_idx,
+            timestamp_s=timestamp_s,
+        )
+
     address = addr_byte >> 1
     direction = "read" if (addr_byte & 1) else "write"
 
@@ -151,4 +181,36 @@ def _finalize_i2c(
             else f"nak on data byte {nak_idx - 1}" if nak_idx is not None
             else None
         ),
+    )
+
+
+def _finalize_10bit_write(
+    address: int,
+    payload: list[int],
+    nak_idx: int | None,
+    timestamp_s: float,
+) -> I2cTransaction:
+    """Build the transaction for a 10-bit write. ``nak_idx`` semantics for
+    10-bit:
+      - 0  → NAK on the high address byte (wire byte 0)
+      - 1  → NAK on the low address byte  (wire byte 1)
+      - N (>=2) → NAK on data byte N - 2
+    """
+    if nak_idx is None:
+        error_detail: str | None = None
+    elif nak_idx == 0:
+        error_detail = "nak on address byte (high)"
+    elif nak_idx == 1:
+        error_detail = "nak on address byte (low)"
+    else:
+        error_detail = f"nak on data byte {nak_idx - 2}"
+    return I2cTransaction(
+        timestamp_s=timestamp_s,
+        type="write",
+        address=address,
+        address_bits=10,
+        data=bytes(payload),
+        nak_at_byte=nak_idx,
+        error=nak_idx is not None,
+        error_detail=error_detail,
     )
