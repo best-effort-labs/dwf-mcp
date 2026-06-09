@@ -17,6 +17,7 @@ from dwf_mcp.instruments._async_sniff import (
     reap_completed_sessions,
     start_observe_session,
     stop_observe_session,
+    stream_observe_session,
 )
 from dwf_mcp.instruments.decoder.can import CanDecoder
 from dwf_mcp.instruments.decoder.i2c import I2cDecoder
@@ -470,41 +471,37 @@ class Sniff(Instrument):
         count = 0
         error_count = 0
         try:
-            # 1-3. Cancel background task, stop hardware, drain remaining samples.
-            all_samples, lost_samples = await stop_observe_session(session, self.device)
+            meta = session.meta
+            pins = meta["pins"]
+            pin_map: dict[str, int] = {
+                "clk":  int(meta["clk_pin"][3:]),
+                "mosi": int(meta["mosi_pin"][3:]),
+            }
+            if meta["miso_pin"] and meta["miso_pin"] in pins:
+                pin_map["miso"] = int(meta["miso_pin"][3:])
+            if meta["cs_pin"] and meta["cs_pin"] in pins:
+                pin_map["cs"] = int(meta["cs_pin"][3:])
 
-            # 4. Decode (SPI-specific).
-            if all_samples.shape[0] > 0:
-                try:
-                    meta = session.meta
-                    pins = meta["pins"]
-                    pin_map: dict[str, int] = {
-                        "clk":  int(meta["clk_pin"][3:]),
-                        "mosi": int(meta["mosi_pin"][3:]),
-                    }
-                    if meta["miso_pin"] and meta["miso_pin"] in pins:
-                        pin_map["miso"] = int(meta["miso_pin"][3:])
-                    if meta["cs_pin"] and meta["cs_pin"] in pins:
-                        pin_map["cs"] = int(meta["cs_pin"][3:])
-
-                    decoder = SpiDecoder()
-                    txns = decoder.decode(
-                        all_samples, pin_map,
-                        sample_rate_hz=meta["sample_rate_hz"],
-                        mode=meta["mode"],
-                    )
-                    count = len(txns)
-                    error_count = sum(1 for t in txns if t.error)
-                    records = [t.to_dict() for t in txns]
-                    result = self.artifacts.write_parquet(
-                        "sniff_spi", records,
-                        config={k: v for k, v in meta.items() if k != "sniff_id"},
-                        output_path=meta.get("output_path"),
-                    )
-                    artifact_path = result.path
-                except Exception as exc:
-                    log.exception("spi_stop decode/write failed for sniff_id=%r", sniff_id)
-                    artifact_error = str(exc)
+            decoder = SpiDecoder()
+            decoder.init(
+                pin_map, sample_rate_hz=meta["sample_rate_hz"], mode=meta["mode"],
+            )
+            txns, lost_samples = await stream_observe_session(
+                session, self.device, decoder,
+            )
+            try:
+                count = len(txns)
+                error_count = sum(1 for t in txns if t.error)
+                records = [t.to_dict() for t in txns]
+                result = self.artifacts.write_parquet(
+                    "sniff_spi", records,
+                    config={k: v for k, v in meta.items() if k != "sniff_id"},
+                    output_path=meta.get("output_path"),
+                )
+                artifact_path = result.path
+            except Exception as exc:
+                log.exception("spi_stop decode/write failed for sniff_id=%r", sniff_id)
+                artifact_error = str(exc)
         finally:
             self.device.allocator.release(session.allocator_key)
 
@@ -585,19 +582,19 @@ class Sniff(Instrument):
         error_count = 0
         txns: list[Any] = []
         try:
-            samples, lost_samples = await stop_observe_session(session, self.device)
             meta = session.meta
+            decoder = I2cDecoder()
+            decoder.init(
+                {
+                    "sda": _dio_index(meta["sda_pin"]),
+                    "scl": _dio_index(meta["scl_pin"]),
+                },
+                sample_rate_hz=meta["sample_rate_hz"],
+            )
+            txns, lost_samples = await stream_observe_session(
+                session, self.device, decoder,
+            )
             try:
-                if samples.shape[0] > 0:
-                    decoder = I2cDecoder()
-                    txns = decoder.decode(
-                        samples,
-                        {
-                            "sda": _dio_index(meta["sda_pin"]),
-                            "scl": _dio_index(meta["scl_pin"]),
-                        },
-                        sample_rate_hz=meta["sample_rate_hz"],
-                    )
                 records = [t.to_dict() for t in txns]
                 # Assign count/error_count BEFORE write so a parquet failure
                 # (disk full, etc.) doesn't zero out a successful decode.
@@ -702,23 +699,21 @@ class Sniff(Instrument):
         count = 0
         error_count = 0
         try:
-            samples, lost_samples = await stop_observe_session(session, self.device)
             meta = session.meta
+            decoder = UartDecoder()
+            decoder.init(
+                {"rx": _dio_index(meta["rx_pin"])},
+                sample_rate_hz=meta["sample_rate_hz"],
+                baud=meta["baud"],
+                data_bits=meta["data_bits"],
+                parity=meta["parity"],
+                stop_bits=meta["stop_bits"],
+                polarity=meta["polarity"],
+            )
+            frames, lost_samples = await stream_observe_session(
+                session, self.device, decoder,
+            )
             try:
-                if samples.shape[0] > 0:
-                    decoder = UartDecoder()
-                    frames = decoder.decode(
-                        samples,
-                        {"rx": _dio_index(meta["rx_pin"])},
-                        sample_rate_hz=meta["sample_rate_hz"],
-                        baud=meta["baud"],
-                        data_bits=meta["data_bits"],
-                        parity=meta["parity"],
-                        stop_bits=meta["stop_bits"],
-                        polarity=meta["polarity"],
-                    )
-                else:
-                    frames = []
                 records = [f.to_dict() for f in frames]
                 # Assign count/error_count BEFORE write so a parquet failure
                 # (disk full, etc.) doesn't zero out a successful decode.
@@ -813,19 +808,17 @@ class Sniff(Instrument):
         count = 0
         error_count = 0
         try:
-            samples, lost_samples = await stop_observe_session(session, self.device)
             meta = session.meta
+            decoder = CanDecoder()
+            decoder.init(
+                {"rx": _dio_index(meta["rx_pin"])},
+                sample_rate_hz=meta["sample_rate_hz"],
+                bitrate=meta["bitrate"],
+            )
+            frames, lost_samples = await stream_observe_session(
+                session, self.device, decoder,
+            )
             try:
-                if samples.shape[0] > 0:
-                    decoder = CanDecoder()
-                    frames = decoder.decode(
-                        samples,
-                        {"rx": _dio_index(meta["rx_pin"])},
-                        sample_rate_hz=meta["sample_rate_hz"],
-                        bitrate=meta["bitrate"],
-                    )
-                else:
-                    frames = []
                 records = [f.to_dict() for f in frames]
                 # Assign count/error_count BEFORE write so a parquet failure
                 # (disk full, etc.) doesn't zero out a successful decode.

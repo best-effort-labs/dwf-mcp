@@ -189,6 +189,33 @@ def reap_completed_sessions(
             sessions.pop(sniff_id, None)
 
 
+async def _quiesce_and_drain(
+    session: _AsyncSniffSession, device: Any
+) -> None:
+    """Cancel the background record task, stop hardware, and drain any final
+    samples into ``session.record_session.chunks``. Shared by both
+    ``stop_observe_session`` (concatenate path) and ``stream_observe_session``
+    (per-chunk decode path)."""
+    r = session.record_session
+    if r.task is not None:
+        r.task.cancel()
+        with suppress(asyncio.CancelledError):
+            await r.task
+
+    try:
+        device.backend.logic_record_stop()
+    except Exception as exc:
+        log.warning("logic_record_stop in _quiesce_and_drain: %s", exc)
+
+    try:
+        available, lost, _ = device.backend.logic_record_status()
+        r.lost_samples += lost
+        if available > 0:
+            r.chunks.append(device.backend.logic_record_read(available))
+    except Exception as exc:
+        log.warning("drain after logic_record_stop: %s", exc)
+
+
 async def stop_observe_session(
     session: _AsyncSniffSession, device: Any
 ) -> tuple[np.ndarray, int]:
@@ -201,29 +228,43 @@ async def stop_observe_session(
     The caller is responsible for releasing the allocator claim
     (``device.allocator.release(session.allocator_key)``) once any
     protocol-specific decoding has completed.
+
+    Prefer :func:`stream_observe_session` when a decoder is available — it
+    feeds chunks through the decoder one at a time, avoiding the 2× memory
+    spike from ``np.concatenate``.
     """
+    await _quiesce_and_drain(session, device)
     r = session.record_session
-    if r.task is not None:
-        r.task.cancel()
-        with suppress(asyncio.CancelledError):
-            await r.task
-
-    try:
-        device.backend.logic_record_stop()
-    except Exception as exc:
-        log.warning("logic_record_stop in stop_observe_session: %s", exc)
-
-    try:
-        available, lost, _ = device.backend.logic_record_status()
-        r.lost_samples += lost
-        if available > 0:
-            r.chunks.append(device.backend.logic_record_read(available))
-    except Exception as exc:
-        log.warning("drain after logic_record_stop: %s", exc)
-
     samples = (
         np.concatenate(r.chunks, axis=0)
         if r.chunks
         else np.zeros((0, 16), dtype=np.uint8)
     )
     return samples, r.lost_samples
+
+
+async def stream_observe_session(
+    session: _AsyncSniffSession,
+    device: Any,
+    decoder: Any,
+) -> tuple[list[Any], int]:
+    """Cancel the record task, stop hardware, and feed each captured chunk
+    through ``decoder`` (which must already be ``init``-ed).
+
+    Returns ``(transactions, lost_samples)`` — the decoder's output across
+    all chunks plus its ``finalize()`` flush.
+
+    Memory benefit over :func:`stop_observe_session`: chunks are processed
+    one at a time without ever being concatenated into a single contiguous
+    array, eliminating the 2× raw memory spike that the concatenate path
+    incurs. Chunks are cleared after processing so peak memory stays at
+    roughly (raw capture) + (decoded output).
+    """
+    await _quiesce_and_drain(session, device)
+    r = session.record_session
+    transactions: list[Any] = []
+    for chunk in r.chunks:
+        transactions.extend(decoder.feed(chunk))
+    transactions.extend(decoder.finalize())
+    r.chunks.clear()
+    return transactions, r.lost_samples
