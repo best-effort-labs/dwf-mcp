@@ -116,6 +116,8 @@ This is the headline Stage 5 capability: `sniff.i2c_start/stop` (observe-mode) u
 // → {"artifact_path": "...parquet", "count": 128, "summary": {...}, ...}
 ```
 
+**Long captures (`stream_decode: true`).** By default each `sniff.*_start` enforces a 32 MB raw-sample ceiling via `check_memory_cap` — at AD3 sample rates a multi-second capture saturates quickly. Pass `stream_decode: true` to opt into a live-decode path that feeds chunks through the protocol decoder during capture instead of buffering raw samples. The 32 MB cap is skipped (max duration is the only remaining bound), but if the decoder can't keep up, `lost_samples` will increment — check it in the stop result.
+
 ### 3. Record raw logic + decode any protocol after the fact
 
 `logic.record_start/stop` produces a raw DIO npz; the `decoder.*` tools then run software state machines over it. You can decode the same capture as multiple protocols, decide on parameters after seeing the data, etc.

@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 
-from dwf_mcp.streaming import RecordingSession, record_loop
+from dwf_mcp.streaming import RecordingSession, process_chunk, record_loop
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,16 @@ class _AsyncSniffSession:
     started_at: float
     completed_at: float | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    decoder: Any | None = None
+    # decoder: protocol decoder instance. Set during start when stream_decode=True
+    # (decoder lives the entire capture lifetime); set just-before-stop in the
+    # accumulation path (constructed locally in *_stop).
+    streaming_decode: bool = False
+    # streaming_decode: True iff stream_observe_session should read from
+    # session.transactions rather than iterating record_session.chunks.
+    transactions: list[Any] = field(default_factory=list)
+    # transactions: per-chunk decoder output accumulated during stream-mode capture.
+    # Empty when streaming_decode=False.
 
     # Convenience accessors so callers (and tests written against the
     # previous `RecordingSession`-shaped sessions) can keep using
@@ -87,6 +97,7 @@ def start_observe_session(
     sample_rate_hz: float,
     max_duration_s: float,
     meta: dict[str, Any],
+    decoder: Any | None = None,
 ) -> _AsyncSniffSession:
     """Claim DigitalIn observer, arm record mode, spawn ``record_loop`` task.
 
@@ -96,6 +107,11 @@ def start_observe_session(
     ``meta`` is stored on both the ``RecordingSession`` and the returned
     :class:`_AsyncSniffSession` so per-protocol ``*_stop`` methods can recover
     their configuration without threading separate state.
+
+    When ``decoder`` is provided, ``on_chunk_sync`` is installed so that the live
+    capture loop feeds each chunk through ``decoder.feed(...)`` and appends the
+    result to ``session.transactions``. ``_AsyncSniffSession.streaming_decode``
+    is set to True so the corresponding stop uses the streaming branch.
     """
     device.allocator.claim_observe(allocator_key)
     try:
@@ -125,6 +141,23 @@ def start_observe_session(
         error=None,
         meta=meta,
     )
+    session = _AsyncSniffSession(
+        sniff_id=sniff_id,
+        record_session=record_session,
+        allocator_key=allocator_key,
+        started_at=time.monotonic(),
+        meta=meta,
+        decoder=decoder,
+        streaming_decode=(decoder is not None),
+    )
+    if decoder is not None:
+        # NOTE: closure captures `session` and `decoder` via default-arg binding to
+        # avoid late-binding surprises. Decoder exceptions from feed() propagate out
+        # of process_chunk → record_loop catches them, sets r.error + r.done. Do NOT
+        # swallow here.
+        record_session.on_chunk_sync = (
+            lambda chunk, _s=session, _d=decoder: _s.transactions.extend(_d.feed(chunk))
+        )
     try:
         record_session.task = asyncio.create_task(
             record_loop(
@@ -141,13 +174,7 @@ def start_observe_session(
         device.allocator.release(allocator_key)
         raise
 
-    return _AsyncSniffSession(
-        sniff_id=sniff_id,
-        record_session=record_session,
-        allocator_key=allocator_key,
-        started_at=time.monotonic(),
-        meta=meta,
-    )
+    return session
 
 
 def reap_completed_sessions(
@@ -207,13 +234,23 @@ async def _quiesce_and_drain(
     except Exception as exc:
         log.warning("logic_record_stop in _quiesce_and_drain: %s", exc)
 
+    # Split error handling: backend status/read errors are log-and-continue (we already
+    # have what we have); but callback errors from process_chunk MUST surface via r.error
+    # so the streaming-mode caller can detect a decoder failure during final drain.
+    chunk = None
     try:
         available, lost, _ = device.backend.logic_record_status()
         r.lost_samples += lost
         if available > 0:
-            r.chunks.append(device.backend.logic_record_read(available))
+            chunk = device.backend.logic_record_read(available)
     except Exception as exc:
         log.warning("drain after logic_record_stop: %s", exc)
+    if chunk is not None:
+        try:
+            process_chunk(r, chunk)
+        except Exception as exc:
+            r.error = str(exc)
+            r.done = True
 
 
 async def stop_observe_session(
@@ -246,25 +283,33 @@ async def stop_observe_session(
 async def stream_observe_session(
     session: _AsyncSniffSession,
     device: Any,
-    decoder: Any,
 ) -> tuple[list[Any], int]:
-    """Cancel the record task, stop hardware, and feed each captured chunk
-    through ``decoder`` (which must already be ``init``-ed).
+    """Cancel the record task, stop hardware, and produce decoded transactions.
 
-    Returns ``(transactions, lost_samples)`` — the decoder's output across
-    all chunks plus its ``finalize()`` flush.
+    The decoder lives on ``session.decoder``. In stream mode (set during
+    ``start_observe_session`` when a decoder was passed), transactions were
+    already accumulated chunk-by-chunk in the live capture loop via
+    ``on_chunk_sync``; this method just finalises. In accumulation mode (the
+    default), this method iterates the buffered chunks and feeds them one at
+    a time, mirroring the historic behaviour of this function before the
+    streaming path was added.
 
-    Memory benefit over :func:`stop_observe_session`: chunks are processed
-    one at a time without ever being concatenated into a single contiguous
-    array, eliminating the 2× raw memory spike that the concatenate path
-    incurs. Chunks are cleared after processing so peak memory stays at
-    roughly (raw capture) + (decoded output).
+    Returns ``(transactions, lost_samples)``. Raises ``RuntimeError`` if
+    the capture path recorded an error (e.g. decoder.feed raised mid-stream).
     """
     await _quiesce_and_drain(session, device)
     r = session.record_session
+    if r.error is not None:
+        raise RuntimeError(f"sniff capture failed: {r.error}")
+    if session.decoder is None:
+        raise RuntimeError("stream_observe_session called without session.decoder set")
     transactions: list[Any] = []
-    for chunk in r.chunks:
-        transactions.extend(decoder.feed(chunk))
-    transactions.extend(decoder.finalize())
-    r.chunks.clear()
+    if session.streaming_decode:
+        transactions.extend(session.transactions)
+        transactions.extend(session.decoder.finalize())
+    else:
+        for chunk in r.chunks:
+            transactions.extend(session.decoder.feed(chunk))
+        transactions.extend(session.decoder.finalize())
+        r.chunks.clear()
     return transactions, r.lost_samples

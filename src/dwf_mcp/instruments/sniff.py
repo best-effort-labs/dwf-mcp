@@ -21,6 +21,7 @@ from dwf_mcp.instruments._async_sniff import (
 )
 from dwf_mcp.instruments.decoder.can import CanDecoder
 from dwf_mcp.instruments.decoder.i2c import I2cDecoder
+from dwf_mcp.instruments.decoder.spi import SpiDecoder
 from dwf_mcp.instruments.decoder.uart import UartDecoder
 
 log = logging.getLogger(__name__)
@@ -87,6 +88,16 @@ SPI_START_SCHEMA: dict[str, Any] = {
         "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
         "poll_interval_s": {"type": "number", "default": 0.010},
         "output_path": {"type": "string"},
+        "stream_decode": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Decode chunks live during capture instead of buffering raw samples. "
+                "Bypasses the 32 MB memory cap. If the decoder cannot keep up with the "
+                "chunk rate, lost_samples increments — check it in the stop result. "
+                "Default false (accumulate + decode at stop)."
+            ),
+        },
     },
 }
 
@@ -112,6 +123,16 @@ SNIFF_I2C_START_SCHEMA: dict[str, Any] = {
         "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
         "sample_rate_hz": {"type": "number", "minimum": 1_000.0},
         "output_path": {"type": "string"},
+        "stream_decode": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Decode chunks live during capture instead of buffering raw samples. "
+                "Bypasses the 32 MB memory cap. If the decoder cannot keep up with the "
+                "chunk rate, lost_samples increments — check it in the stop result. "
+                "Default false (accumulate + decode at stop)."
+            ),
+        },
     },
 }
 
@@ -136,6 +157,16 @@ SNIFF_UART_START_SCHEMA: dict[str, Any] = {
         "polarity": {"type": "integer", "enum": [0, 1], "default": 0},
         "sample_rate_hz": {"type": "number", "minimum": 1_000.0},
         "output_path": {"type": "string"},
+        "stream_decode": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Decode chunks live during capture instead of buffering raw samples. "
+                "Bypasses the 32 MB memory cap. If the decoder cannot keep up with the "
+                "chunk rate, lost_samples increments — check it in the stop result. "
+                "Default false (accumulate + decode at stop)."
+            ),
+        },
     },
 }
 
@@ -148,6 +179,16 @@ SNIFF_CAN_START_SCHEMA: dict[str, Any] = {
         "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
         "sample_rate_hz": {"type": "number", "minimum": 1_000.0},
         "output_path": {"type": "string"},
+        "stream_decode": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Decode chunks live during capture instead of buffering raw samples. "
+                "Bypasses the 32 MB memory cap. If the decoder cannot keep up with the "
+                "chunk rate, lost_samples increments — check it in the stop result. "
+                "Default false (accumulate + decode at stop)."
+            ),
+        },
     },
 }
 
@@ -414,10 +455,12 @@ class Sniff(Instrument):
         cs_pin: str | None = None,
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
+        stream_decode: bool = False,
     ) -> dict[str, Any]:
         sample_rate_hz = freq_hz * 10  # 10× oversampling
         pins = [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None]
-        check_memory_cap(sample_rate_hz, max_duration_s, n_pins=len(pins))
+        if not stream_decode:
+            check_memory_cap(sample_rate_hz, max_duration_s, n_pins=len(pins))
         pin_mask = sum(1 << int(p[3:]) for p in pins)
 
         sniff_id = str(uuid.uuid4())
@@ -434,6 +477,18 @@ class Sniff(Instrument):
             "mode": mode,
             "output_path": output_path,
         }
+        decoder_inst: Any | None = None
+        if stream_decode:
+            pin_map: dict[str, int] = {
+                "clk":  int(clk_pin[3:]),
+                "mosi": int(mosi_pin[3:]),
+            }
+            if miso_pin is not None and miso_pin in pins:
+                pin_map["miso"] = int(miso_pin[3:])
+            if cs_pin is not None and cs_pin in pins:
+                pin_map["cs"] = int(cs_pin[3:])
+            decoder_inst = SpiDecoder()
+            decoder_inst.init(pin_map, sample_rate_hz=sample_rate_hz, mode=mode)
         session = start_observe_session(
             device=self.device,
             allocator_key=allocator_key,
@@ -441,6 +496,7 @@ class Sniff(Instrument):
             sample_rate_hz=sample_rate_hz,
             max_duration_s=max_duration_s,
             meta=meta,
+            decoder=decoder_inst,
         )
         self._spi_sessions[sniff_id] = session
         reap_completed_sessions(self._spi_sessions, self.device)
@@ -452,7 +508,7 @@ class Sniff(Instrument):
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
         r = session.record_session
-        total_samples = sum(len(c) for c in r.chunks)
+        total_samples = r.samples_received
         return {
             "samples_received": total_samples,
             "lost_samples": r.lost_samples,
@@ -460,8 +516,6 @@ class Sniff(Instrument):
         }
 
     async def spi_stop(self, sniff_id: str) -> dict[str, Any]:
-        from dwf_mcp.instruments.decoder.spi import SpiDecoder
-
         session = self._spi_sessions.pop(sniff_id, None)
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
@@ -472,23 +526,25 @@ class Sniff(Instrument):
         error_count = 0
         try:
             meta = session.meta
-            pins = meta["pins"]
-            pin_map: dict[str, int] = {
-                "clk":  int(meta["clk_pin"][3:]),
-                "mosi": int(meta["mosi_pin"][3:]),
-            }
-            if meta["miso_pin"] and meta["miso_pin"] in pins:
-                pin_map["miso"] = int(meta["miso_pin"][3:])
-            if meta["cs_pin"] and meta["cs_pin"] in pins:
-                pin_map["cs"] = int(meta["cs_pin"][3:])
-
-            decoder = SpiDecoder()
-            decoder.init(
-                pin_map, sample_rate_hz=meta["sample_rate_hz"], mode=meta["mode"],
-            )
-            txns, lost_samples = await stream_observe_session(
-                session, self.device, decoder,
-            )
+            if session.streaming_decode:
+                # Decoder lives on session.decoder, transactions accumulated live; just finalise.
+                txns, lost_samples = await stream_observe_session(session, self.device)
+            else:
+                pins = meta["pins"]
+                pin_map: dict[str, int] = {
+                    "clk":  int(meta["clk_pin"][3:]),
+                    "mosi": int(meta["mosi_pin"][3:]),
+                }
+                if meta["miso_pin"] and meta["miso_pin"] in pins:
+                    pin_map["miso"] = int(meta["miso_pin"][3:])
+                if meta["cs_pin"] and meta["cs_pin"] in pins:
+                    pin_map["cs"] = int(meta["cs_pin"][3:])
+                decoder = SpiDecoder()
+                decoder.init(
+                    pin_map, sample_rate_hz=meta["sample_rate_hz"], mode=meta["mode"],
+                )
+                session.decoder = decoder
+                txns, lost_samples = await stream_observe_session(session, self.device)
             try:
                 count = len(txns)
                 error_count = sum(1 for t in txns if t.error)
@@ -526,13 +582,15 @@ class Sniff(Instrument):
         max_duration_s: float,
         sample_rate_hz: float | None = None,
         output_path: str | None = None,
+        stream_decode: bool = False,
     ) -> dict[str, Any]:
         rate = float(sample_rate_hz) if sample_rate_hz else float(clock_hz) * 10.0
         if rate / float(clock_hz) < 4.0:
             raise ValueError(
                 f"I2C decode requires >=4x oversampling, got {rate / float(clock_hz):.1f}x"
             )
-        check_memory_cap(rate, max_duration_s, n_pins=2)
+        if not stream_decode:
+            check_memory_cap(rate, max_duration_s, n_pins=2)
 
         sniff_id = str(uuid.uuid4())
         allocator_key = f"sniff_i2c_{sniff_id}"
@@ -546,6 +604,16 @@ class Sniff(Instrument):
             "max_duration_s": max_duration_s,
             "output_path": output_path,
         }
+        decoder_inst: Any | None = None
+        if stream_decode:
+            decoder_inst = I2cDecoder()
+            decoder_inst.init(
+                {
+                    "sda": _dio_index(sda_pin),
+                    "scl": _dio_index(scl_pin),
+                },
+                sample_rate_hz=rate,
+            )
         session = start_observe_session(
             device=self.device,
             allocator_key=allocator_key,
@@ -553,6 +621,7 @@ class Sniff(Instrument):
             sample_rate_hz=rate,
             max_duration_s=max_duration_s,
             meta=meta,
+            decoder=decoder_inst,
         )
         self._async_sessions[sniff_id] = session
         reap_completed_sessions(self._async_sessions, self.device)
@@ -564,7 +633,7 @@ class Sniff(Instrument):
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
         rs = session.record_session
-        total = sum(len(c) for c in rs.chunks)
+        total = rs.samples_received
         return {
             "samples_received": total,
             "lost_samples": rs.lost_samples,
@@ -583,17 +652,20 @@ class Sniff(Instrument):
         txns: list[Any] = []
         try:
             meta = session.meta
-            decoder = I2cDecoder()
-            decoder.init(
-                {
-                    "sda": _dio_index(meta["sda_pin"]),
-                    "scl": _dio_index(meta["scl_pin"]),
-                },
-                sample_rate_hz=meta["sample_rate_hz"],
-            )
-            txns, lost_samples = await stream_observe_session(
-                session, self.device, decoder,
-            )
+            if session.streaming_decode:
+                # Decoder lives on session.decoder, transactions accumulated live; just finalise.
+                txns, lost_samples = await stream_observe_session(session, self.device)
+            else:
+                decoder = I2cDecoder()
+                decoder.init(
+                    {
+                        "sda": _dio_index(meta["sda_pin"]),
+                        "scl": _dio_index(meta["scl_pin"]),
+                    },
+                    sample_rate_hz=meta["sample_rate_hz"],
+                )
+                session.decoder = decoder
+                txns, lost_samples = await stream_observe_session(session, self.device)
             try:
                 records = [t.to_dict() for t in txns]
                 # Assign count/error_count BEFORE write so a parquet failure
@@ -641,13 +713,15 @@ class Sniff(Instrument):
         polarity: int = 0,
         sample_rate_hz: float | None = None,
         output_path: str | None = None,
+        stream_decode: bool = False,
     ) -> dict[str, Any]:
         rate = float(sample_rate_hz) if sample_rate_hz else float(baud) * 10.0
         if rate / float(baud) < 4.0:
             raise ValueError(
                 f"UART decode requires >=4x oversampling, got {rate / float(baud):.1f}x"
             )
-        check_memory_cap(rate, max_duration_s, n_pins=1)
+        if not stream_decode:
+            check_memory_cap(rate, max_duration_s, n_pins=1)
 
         sniff_id = str(uuid.uuid4())
         allocator_key = f"sniff_uart_{sniff_id}"
@@ -664,6 +738,18 @@ class Sniff(Instrument):
             "max_duration_s": max_duration_s,
             "output_path": output_path,
         }
+        decoder_inst: Any | None = None
+        if stream_decode:
+            decoder_inst = UartDecoder()
+            decoder_inst.init(
+                {"rx": _dio_index(rx_pin)},
+                sample_rate_hz=rate,
+                baud=baud,
+                data_bits=data_bits,
+                parity=parity,
+                stop_bits=stop_bits,
+                polarity=polarity,
+            )
         session = start_observe_session(
             device=self.device,
             allocator_key=allocator_key,
@@ -671,6 +757,7 @@ class Sniff(Instrument):
             sample_rate_hz=rate,
             max_duration_s=max_duration_s,
             meta=meta,
+            decoder=decoder_inst,
         )
         self._async_sessions[sniff_id] = session
         reap_completed_sessions(self._async_sessions, self.device)
@@ -682,7 +769,7 @@ class Sniff(Instrument):
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
         rs = session.record_session
-        total = sum(len(c) for c in rs.chunks)
+        total = rs.samples_received
         return {
             "samples_received": total,
             "lost_samples": rs.lost_samples,
@@ -700,19 +787,22 @@ class Sniff(Instrument):
         error_count = 0
         try:
             meta = session.meta
-            decoder = UartDecoder()
-            decoder.init(
-                {"rx": _dio_index(meta["rx_pin"])},
-                sample_rate_hz=meta["sample_rate_hz"],
-                baud=meta["baud"],
-                data_bits=meta["data_bits"],
-                parity=meta["parity"],
-                stop_bits=meta["stop_bits"],
-                polarity=meta["polarity"],
-            )
-            frames, lost_samples = await stream_observe_session(
-                session, self.device, decoder,
-            )
+            if session.streaming_decode:
+                # Decoder lives on session.decoder, transactions accumulated live; just finalise.
+                frames, lost_samples = await stream_observe_session(session, self.device)
+            else:
+                decoder = UartDecoder()
+                decoder.init(
+                    {"rx": _dio_index(meta["rx_pin"])},
+                    sample_rate_hz=meta["sample_rate_hz"],
+                    baud=meta["baud"],
+                    data_bits=meta["data_bits"],
+                    parity=meta["parity"],
+                    stop_bits=meta["stop_bits"],
+                    polarity=meta["polarity"],
+                )
+                session.decoder = decoder
+                frames, lost_samples = await stream_observe_session(session, self.device)
             try:
                 records = [f.to_dict() for f in frames]
                 # Assign count/error_count BEFORE write so a parquet failure
@@ -752,6 +842,7 @@ class Sniff(Instrument):
         max_duration_s: float,
         sample_rate_hz: float | None = None,
         output_path: str | None = None,
+        stream_decode: bool = False,
     ) -> dict[str, Any]:
         # Default 20× oversampling — CAN spec requires >=8× per bit; 20× gives
         # safe headroom for the 75 % sample point and bit-stuff destuffing.
@@ -760,7 +851,8 @@ class Sniff(Instrument):
             raise ValueError(
                 f"CAN decode requires >=8x oversampling, got {rate / float(bitrate):.1f}x"
             )
-        check_memory_cap(rate, max_duration_s, n_pins=1)
+        if not stream_decode:
+            check_memory_cap(rate, max_duration_s, n_pins=1)
 
         sniff_id = str(uuid.uuid4())
         allocator_key = f"sniff_can_{sniff_id}"
@@ -773,6 +865,14 @@ class Sniff(Instrument):
             "max_duration_s": max_duration_s,
             "output_path": output_path,
         }
+        decoder_inst: Any | None = None
+        if stream_decode:
+            decoder_inst = CanDecoder()
+            decoder_inst.init(
+                {"rx": _dio_index(rx_pin)},
+                sample_rate_hz=rate,
+                bitrate=bitrate,
+            )
         session = start_observe_session(
             device=self.device,
             allocator_key=allocator_key,
@@ -780,6 +880,7 @@ class Sniff(Instrument):
             sample_rate_hz=rate,
             max_duration_s=max_duration_s,
             meta=meta,
+            decoder=decoder_inst,
         )
         self._async_sessions[sniff_id] = session
         reap_completed_sessions(self._async_sessions, self.device)
@@ -791,7 +892,7 @@ class Sniff(Instrument):
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
         rs = session.record_session
-        total = sum(len(c) for c in rs.chunks)
+        total = rs.samples_received
         return {
             "samples_received": total,
             "lost_samples": rs.lost_samples,
@@ -809,15 +910,18 @@ class Sniff(Instrument):
         error_count = 0
         try:
             meta = session.meta
-            decoder = CanDecoder()
-            decoder.init(
-                {"rx": _dio_index(meta["rx_pin"])},
-                sample_rate_hz=meta["sample_rate_hz"],
-                bitrate=meta["bitrate"],
-            )
-            frames, lost_samples = await stream_observe_session(
-                session, self.device, decoder,
-            )
+            if session.streaming_decode:
+                # Decoder lives on session.decoder, transactions accumulated live; just finalise.
+                frames, lost_samples = await stream_observe_session(session, self.device)
+            else:
+                decoder = CanDecoder()
+                decoder.init(
+                    {"rx": _dio_index(meta["rx_pin"])},
+                    sample_rate_hz=meta["sample_rate_hz"],
+                    bitrate=meta["bitrate"],
+                )
+                session.decoder = decoder
+                frames, lost_samples = await stream_observe_session(session, self.device)
             try:
                 records = [f.to_dict() for f in frames]
                 # Assign count/error_count BEFORE write so a parquet failure

@@ -54,6 +54,7 @@ class FakeBackend(DwfBackend):
         self._logic_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
         self._logic_record_status_idx = 0
         self._logic_record_canned_chunk: np.ndarray = np.zeros((10, 16), dtype=np.uint8)
+        self._logic_record_chunks_queue: list[np.ndarray] = []
         # Scope record-mode state
         self.scope_record_calls: list[tuple[str, dict[str, Any]]] = []
         self._scope_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
@@ -309,6 +310,8 @@ class FakeBackend(DwfBackend):
         return result
 
     def logic_record_read(self, count: int) -> np.ndarray:
+        if self._logic_record_chunks_queue:
+            return self._logic_record_chunks_queue.pop(0)
         return self._logic_record_canned_chunk[:count]
 
     def logic_record_stop(self) -> None:
@@ -324,6 +327,13 @@ class FakeBackend(DwfBackend):
     ) -> None:
         self._logic_record_status_sequence = list(sequence)
         self._logic_record_status_idx = 0
+
+    def set_logic_record_chunks(self, chunks: list[np.ndarray]) -> None:
+        """Configure successive logic_record_read() calls to return chunks from this
+        queue in order. When the queue is exhausted, falls back to the legacy
+        canned-chunk slice. Use alongside set_logic_record_status_sequence() to
+        drive a deterministic multi-chunk capture in tests."""
+        self._logic_record_chunks_queue = list(chunks)
 
     # --- DMM (AnalogIn measurement) ---
 

@@ -27,11 +27,19 @@ class RecordingSession:
     # on_chunk: async callback for lifecycle tracking (spec-required for MCP notifications).
     on_chunk_sync: Callable[[np.ndarray], None] | None = None
     # on_chunk_sync: called synchronously per chunk before queue put.
-    # When set, chunks are NOT appended to session.chunks (write-through for VCD).
+    # When set, chunks are NOT appended to session.chunks (write-through for VCD
+    # or live-decode sniff). SINGLE-OWNER: only one consumer at a time (no
+    # callback composition); callers that need to share must build their own
+    # multiplexing layer. Today: VCD writer OR sniff streaming, never both on
+    # the same session.
     meta: dict[str, Any] = dataclasses.field(default_factory=dict)
+    # samples_received: cumulative samples seen by process_chunk; source of truth
+    # for status reporting (accumulation- AND stream-mode).
+    samples_received: int = 0
 
 
 def process_chunk(session: RecordingSession, chunk: np.ndarray) -> None:
+    session.samples_received += len(chunk)
     if session.on_chunk_sync is not None:
         session.on_chunk_sync(chunk)
     else:
