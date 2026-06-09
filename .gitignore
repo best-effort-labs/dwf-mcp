@@ -1,4 +1,5 @@
 .worktrees/
+.claude/
 __pycache__/
 *.pyc
 .venv/
@@ -6,3 +7,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Runtime-generated audit log written by SafetyPolicy.gate_output
+dwf-safety.log
