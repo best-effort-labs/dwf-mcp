@@ -15,6 +15,9 @@ class I2cDecoder(Decoder):
     ACK/NAK sampling. The decoder samples SDA on each SCL rising edge,
     accumulates 8 data bits, then samples the 9th bit as ACK (0) or NAK (1).
 
+    Supports streaming via ``init`` / ``feed`` / ``finalize`` (process chunks
+    as they arrive) or one-shot via ``decode(samples)``.
+
     10-bit addressing detection: when the first byte of a transaction
     matches the reserved pattern ``11110xxR``, the byte's A9/A8 bits plus
     the subsequent byte (A7..A0) form the 10-bit address. ``address_bits``
@@ -35,78 +38,104 @@ class I2cDecoder(Decoder):
 
     protocol_name: ClassVar[str] = "i2c"
 
-    def decode(  # type: ignore[override]
+    def init(  # type: ignore[override]
         self,
-        samples: np.ndarray,
         pin_map: dict[str, int],
         sample_rate_hz: float,
         **_unused: Any,
-    ) -> list[I2cTransaction]:
+    ) -> None:
         if sample_rate_hz <= 0:
             raise ValueError(
                 f"sample_rate_hz must be positive, got {sample_rate_hz}"
             )
-        sda = samples[:, pin_map["sda"]].astype(np.int8)
-        scl = samples[:, pin_map["scl"]].astype(np.int8)
-        # Prepend first sample so diff has same length and edges at i index
-        # reflect transition into sample i.
-        sda_diff = np.diff(np.concatenate([[sda[0]], sda]))
-        scl_diff = np.diff(np.concatenate([[scl[0]], scl]))
+        self._sda_col = pin_map["sda"]
+        self._scl_col = pin_map["scl"]
+        self._sample_rate_hz = sample_rate_hz
+        # Edge-detection carries the last sample of each line across chunks.
+        # Initial idle is HIGH for both. The very first sample of the stream
+        # is compared against these; if a real transition happened before the
+        # capture began we lose nothing because edges only matter inside
+        # transactions, which are gated on a START condition.
+        self._prev_sda: int = 1
+        self._prev_scl: int = 1
+        # Transaction state.
+        self._in_txn = False
+        self._pending: list[int] = []
+        self._current_byte = 0
+        self._bit_count = 0
+        self._addr_byte: int | None = None
+        self._nak_idx: int | None = None
+        self._ninth_bit = False
+        self._txn_start_abs_idx = 0  # absolute sample index of the START
+        # Position tracking.
+        self._consumed_total = 0
+
+    def feed(self, samples: np.ndarray) -> list[I2cTransaction]:  # type: ignore[override]
+        sda = samples[:, self._sda_col].astype(np.int8)
+        scl = samples[:, self._scl_col].astype(np.int8)
+        n = len(sda)
+        if n == 0:
+            return []
+        # Edge into the first sample is relative to the previous chunk's tail.
+        sda_diff = np.diff(np.concatenate([[self._prev_sda], sda]))
+        scl_diff = np.diff(np.concatenate([[self._prev_scl], scl]))
 
         out: list[I2cTransaction] = []
-        in_txn = False
-        pending: list[int] = []
-        current_byte = 0
-        bit_count = 0
-        addr_byte: int | None = None
-        nak_idx: int | None = None
-        txn_start_idx = 0
-        ninth_bit = False
-
-        for i in range(len(sda)):
-            # START condition: SDA falls while SCL is high
+        for i in range(n):
+            abs_i = self._consumed_total + i
+            # START: SDA falls while SCL high.
             if scl[i] and sda_diff[i] == -1:
-                in_txn = True
-                pending = []
-                current_byte = 0
-                bit_count = 0
-                addr_byte = None
-                nak_idx = None
-                ninth_bit = False
-                txn_start_idx = i
+                self._in_txn = True
+                self._pending = []
+                self._current_byte = 0
+                self._bit_count = 0
+                self._addr_byte = None
+                self._nak_idx = None
+                self._ninth_bit = False
+                self._txn_start_abs_idx = abs_i
                 continue
-            # STOP condition: SDA rises while SCL is high
-            if in_txn and scl[i] and sda_diff[i] == 1:
-                if pending or addr_byte is not None:
+            # STOP: SDA rises while SCL high.
+            if self._in_txn and scl[i] and sda_diff[i] == 1:
+                if self._pending or self._addr_byte is not None:
                     out.append(_finalize_i2c(
-                        addr_byte, pending, nak_idx,
-                        timestamp_s=txn_start_idx / sample_rate_hz,
+                        self._addr_byte, self._pending, self._nak_idx,
+                        timestamp_s=self._txn_start_abs_idx / self._sample_rate_hz,
                     ))
-                in_txn = False
+                self._in_txn = False
                 continue
-            # SCL rising edge inside a transaction: sample SDA
-            if in_txn and scl_diff[i] == 1:
-                if ninth_bit:
-                    # ACK/NAK bit: 0 = ACK, 1 = NAK
-                    if sda[i] == 1 and nak_idx is None:
-                        # nak_idx encoding for _finalize_i2c:
-                        #   0       => NAK on address byte
-                        #   N (>=1) => NAK on data byte (N - 1)
-                        nak_idx = 0 if addr_byte is None else len(pending) + 1
-                    if addr_byte is None:
-                        addr_byte = current_byte
+            # SCL rising edge inside a transaction: sample SDA.
+            if self._in_txn and scl_diff[i] == 1:
+                if self._ninth_bit:
+                    if sda[i] == 1 and self._nak_idx is None:
+                        self._nak_idx = (
+                            0 if self._addr_byte is None else len(self._pending) + 1
+                        )
+                    if self._addr_byte is None:
+                        self._addr_byte = self._current_byte
                     else:
-                        pending.append(current_byte)
-                    current_byte = 0
-                    bit_count = 0
-                    ninth_bit = False
+                        self._pending.append(self._current_byte)
+                    self._current_byte = 0
+                    self._bit_count = 0
+                    self._ninth_bit = False
                 else:
-                    current_byte = (current_byte << 1) | int(sda[i])
-                    bit_count += 1
-                    if bit_count == 8:
-                        ninth_bit = True
+                    self._current_byte = (self._current_byte << 1) | int(sda[i])
+                    self._bit_count += 1
+                    if self._bit_count == 8:
+                        self._ninth_bit = True
 
+        # Advance position and remember the last sample for next chunk's diff.
+        self._consumed_total += n
+        self._prev_sda = int(sda[-1])
+        self._prev_scl = int(scl[-1])
         return out
+
+    def finalize(self) -> list[I2cTransaction]:  # type: ignore[override]
+        # If we ended mid-transaction (no STOP seen), drop the partial state.
+        # Emitting a half-decoded transaction would confuse callers more than
+        # silently dropping it.
+        self._in_txn = False
+        self._pending = []
+        return []
 
 
 def _finalize_i2c(

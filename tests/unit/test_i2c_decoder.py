@@ -195,3 +195,60 @@ def test_decode_rejects_zero_sample_rate() -> None:
             np.zeros((10, 16), dtype=np.uint8), {"sda": 0, "scl": 1},
             sample_rate_hz=0,
         )
+
+
+# --- Streaming API tests --------------------------------------------------
+
+def test_streaming_single_chunk_matches_oneshot() -> None:
+    samples = _i2c_samples([(0x50, b"\x01\x02", True), (0x60, b"\xAB", True)])
+    one_shot = I2cDecoder().decode(samples, {"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    streaming = I2cDecoder()
+    streaming.init({"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    out = streaming.feed(samples)
+    out.extend(streaming.finalize())
+    assert len(out) == len(one_shot)
+    for a, b in zip(out, one_shot):
+        assert a.address == b.address
+        assert a.data == b.data
+        assert abs(a.timestamp_s - b.timestamp_s) < 1e-9
+
+
+def test_streaming_arbitrary_chunk_boundaries() -> None:
+    """Cutting the same buffer at varied positions must yield identical
+    transactions. This proves the START/STOP edge detection works across
+    chunk boundaries via the prev_sda/prev_scl carry."""
+    samples = _i2c_samples([
+        (0x50, b"\x01\x02", True),
+        (0x60, b"\xAB", True),
+        (0x70, b"\xCD\xEF", True),
+    ])
+    expected = I2cDecoder().decode(samples, {"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    n = samples.shape[0]
+    for cut in (n // 7, n // 4, n // 3, n // 2, 2 * n // 3, 3 * n // 4):
+        decoder = I2cDecoder()
+        decoder.init({"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+        out = decoder.feed(samples[:cut])
+        out.extend(decoder.feed(samples[cut:]))
+        out.extend(decoder.finalize())
+        assert len(out) == len(expected), f"cut={cut} produced {len(out)} != {len(expected)}"
+        for a, b in zip(out, expected):
+            assert a.address == b.address, f"cut={cut} address mismatch"
+            assert a.data == b.data, f"cut={cut} data mismatch"
+            assert abs(a.timestamp_s - b.timestamp_s) < 1e-9, f"cut={cut} ts mismatch"
+
+
+def test_streaming_chunk_inside_transaction_carries() -> None:
+    """Cut a chunk in the middle of an I2C transaction. The transaction
+    must be emitted on whichever feed() observes the STOP."""
+    samples = _i2c_samples([(0x50, b"\x42", True)])
+    # 'Right in the middle' — likely between SCL edges of a data byte.
+    cut = samples.shape[0] // 2
+    decoder = I2cDecoder()
+    decoder.init({"sda": 0, "scl": 1}, sample_rate_hz=1_000_000.0)
+    first = decoder.feed(samples[:cut])
+    assert first == []  # STOP hasn't happened yet
+    second = decoder.feed(samples[cut:])
+    second.extend(decoder.finalize())
+    assert len(second) == 1
+    assert second[0].address == 0x50
+    assert second[0].data == b"\x42"
