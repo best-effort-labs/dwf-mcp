@@ -40,6 +40,130 @@ async def test_instrument_tool_before_open_returns_clean_error(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_unknown_tool_raises_valueerror(tmp_path) -> None:
+    """call_tool with an unregistered tool name raises ValueError immediately,
+    before any device interaction. Caller can distinguish from runtime errors."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    with pytest.raises(ValueError, match="unknown tool"):
+        await app.call_tool("nonexistent.thing", {})
+
+
+@pytest.mark.asyncio
+async def test_waveforms_open_returns_device_info(tmp_path) -> None:
+    """waveforms.open returns a device info dict with serial/model/firmware."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    result = await app.call_tool("waveforms.open", {})
+    assert "device" in result
+    assert "serial" in result["device"]
+    assert "model" in result["device"]
+    assert "firmware" in result["device"]
+    assert result["workspace"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_waveforms_status_reflects_open_state(tmp_path) -> None:
+    """waveforms.status returns open=False before waveforms.open, open=True after."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    status_before = await app.call_tool("waveforms.status", {})
+    assert status_before["open"] is False
+    await app.call_tool("waveforms.open", {})
+    status_after = await app.call_tool("waveforms.status", {})
+    assert status_after["open"] is True
+
+
+@pytest.mark.asyncio
+async def test_waveforms_list_pins_requires_open(tmp_path) -> None:
+    """waveforms.list_pins returns an error dict when device isn't open."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    result = await app.call_tool("waveforms.list_pins", {})
+    assert "error" in result
+    assert result["error"]["type"] == "DwfDeviceLost"
+
+
+@pytest.mark.asyncio
+async def test_waveforms_close_releases_all_instruments(tmp_path) -> None:
+    """waveforms.close clears the lazy-instantiated instrument cache so a fresh
+    open starts with a clean slate."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    # Touch dio to lazy-construct it
+    await app.call_tool("dio.set_direction", {"pin": "dio0", "direction": "out"})
+    assert "dio" in app.instruments
+    await app.call_tool("waveforms.close", {})
+    assert app.instruments == {}
+
+
+@pytest.mark.asyncio
+async def test_tick_idle_closes_device_after_timeout(tmp_path) -> None:
+    """If idle_timeout_s elapses between tool calls, the device auto-closes
+    on the next call_tool invocation (tick_idle runs first)."""
+    import time
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path), idle_timeout_s=0.001)
+    await app.call_tool("waveforms.open", {})
+    assert app.device.is_open
+    # Backdate last activity to force the idle timer to expire on next tick.
+    app.device._last_activity = time.monotonic() - 1.0
+    # call_tool runs tick_idle first; the device should be closed before the
+    # status response is built (status reports open=False).
+    status = await app.call_tool("waveforms.status", {})
+    assert status["open"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_instrument_caches_instance(tmp_path) -> None:
+    """Lazy instrument construction returns the same instance on repeated calls."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    # First call constructs; second call should return the cached instance.
+    await app.call_tool("dio.set_direction", {"pin": "dio0", "direction": "out"})
+    first = app.instruments["dio"]
+    await app.call_tool("dio.set_direction", {"pin": "dio1", "direction": "out"})
+    second = app.instruments["dio"]
+    assert first is second
+
+
+@pytest.mark.asyncio
+async def test_call_tool_wraps_pin_allocation_error(tmp_path) -> None:
+    """PinAllocationError raised mid-tool is converted to {"error": {...}}
+    rather than propagating to the caller."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    # First i2c.configure claims dio0/dio1. Second logic.configure on
+    # overlapping pins triggers PinAllocationError.
+    await app.call_tool("i2c.configure", {
+        "sda_pin": "dio0", "scl_pin": "dio1", "clock_hz": 100_000,
+    })
+    result = await app.call_tool("logic.configure", {
+        "pins": ["dio0"], "sample_rate_hz": 1e6, "buffer_size": 1024,
+    })
+    assert "error" in result
+    assert result["error"]["type"] == "PinAllocationError"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_wraps_safety_violation(tmp_path) -> None:
+    """SafetyViolation (e.g. supply voltage over policy max) is returned as
+    an error dict, not raised."""
+    from dwf_mcp.server import build_app
+    app = build_app(
+        backend_name="fake", workspace=str(tmp_path),
+    )
+    await app.call_tool("waveforms.open", {"supply_max_voltage_pos": 3.3})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 5.0})
+    result = await app.call_tool("supply.enable", {"channel": "vpos"})
+    assert "error" in result
+    assert result["error"]["type"] == "SafetyViolation"
+
+
+@pytest.mark.asyncio
 async def test_handler_awaits_coroutine(tmp_path):
     from dwf_mcp.server import build_app
     app = build_app(backend_name="fake", workspace=str(tmp_path))
