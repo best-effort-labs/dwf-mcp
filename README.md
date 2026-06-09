@@ -69,8 +69,8 @@ Every output-driving call (`supply.enable`, `awg.start`, `pattern.start`) routes
 {"name": "supply.set", "arguments": {"channel": "vpos", "voltage": 3.3}}
 {"name": "supply.enable", "arguments": {"channel": "vpos"}}
 {"name": "awg.configure", "arguments": {
-  "channel": 1, "function": "square", "frequency_hz": 1000,
-  "amplitude": 1.5, "offset": 1.5
+  "channel": 1, "function": "Square", "frequency_hz": 1000,
+  "amplitude_v": 1.5, "offset_v": 1.5
 }}
 {"name": "awg.start", "arguments": {"channel": 1}}
 
@@ -116,9 +116,53 @@ This is the headline Stage 5 capability: `sniff.i2c_start/stop` (observe-mode) u
 // → {"artifact_path": "...parquet", "count": 128, "summary": {...}, ...}
 ```
 
-**Long captures (`stream_decode: true`).** By default each `sniff.*_start` enforces a 32 MB raw-sample ceiling via `check_memory_cap` — at AD3 sample rates a multi-second capture saturates quickly. Pass `stream_decode: true` to opt into a live-decode path that feeds chunks through the protocol decoder during capture instead of buffering raw samples. The 32 MB cap is skipped (max duration is the only remaining bound), but if the decoder can't keep up, `lost_samples` will increment — check it in the stop result.
+### 3. Drive an active SPI master and read back the response
 
-### 3. Record raw logic + decode any protocol after the fact
+The four protocol masters (`i2c`, `spi`, `uart`, `can`) wrap the AD3's protocol engines so the LLM can talk to real chips without bit-banging. SPI shown here; the others follow the same `configure` → `transfer/write/read` shape.
+
+```jsonc
+{"name": "waveforms.open", "arguments": {}}
+
+// Pin out the bus. With MISO tied to MOSI on the breadboard, transfer() loops bytes back.
+{"name": "spi.configure", "arguments": {
+  "clk_pin": "dio0", "mosi_pin": "dio1", "miso_pin": "dio1", "cs_pin": "dio2",
+  "frequency_hz": 1_000_000, "mode": 0, "bit_order": "msb"
+}}
+
+// Drive CS low, clock out 4 bytes, capture 4 bytes from MISO, drive CS high.
+{"name": "spi.transfer", "arguments": {"data": [0xAB, 0xCD, 0xEF, 0x12], "assert_cs": true}}
+// → {"received": [171, 205, 239, 18], "byte_count": 4}
+```
+
+For asymmetric reads (write-then-read with a turnaround), use `spi.write` + `spi.read` separately with `assert_cs: false` on the first call so CS stays low across both.
+
+### 4. Long observe-mode capture with live decode (`stream_decode: true`)
+
+By default each `sniff.*_start` enforces a 32 MB raw-sample ceiling via `check_memory_cap` — at AD3 sample rates a multi-second capture saturates quickly. Pass `stream_decode: true` to feed chunks through the protocol decoder during capture instead of buffering raw samples. The 32 MB cap is skipped (max duration is the only remaining bound).
+
+```jsonc
+{"name": "waveforms.open", "arguments": {}}
+
+// 60-second I2C capture — without stream_decode this would be rejected by the cap.
+{"name": "sniff.i2c_start", "arguments": {
+  "sda_pin": "dio0", "scl_pin": "dio1",
+  "clock_hz": 400_000, "max_duration_s": 60.0,
+  "stream_decode": true
+}}
+// → {"sniff_id": "..."}
+
+// While the capture runs, status reports incremental progress.
+{"name": "sniff.i2c_status", "arguments": {"sniff_id": "..."}}
+// → {"done": false, "samples_received": 6_200_000, "lost_samples": 0}
+
+// Stop. Transactions were decoded live, so the stop result is ready immediately.
+{"name": "sniff.i2c_stop", "arguments": {"sniff_id": "..."}}
+// → {"artifact_path": "...parquet", "count": 1147, "lost_samples": 0, "summary": {...}, ...}
+```
+
+If the decoder can't keep up with the chunk rate (rare for I2C/UART at typical rates, more likely for SPI/CAN at the upper end), the backend's record buffer fills and samples drop — `lost_samples > 0` in the stop result is the signal. The captured-and-decoded transactions are still valid; only the dropped raw bytes weren't seen. Reduce `sample_rate_hz` or `max_duration_s` (or fall back to `stream_decode: false` with the cap).
+
+### 5. Record raw logic + decode any protocol after the fact
 
 `logic.record_start/stop` produces a raw DIO npz; the `decoder.*` tools then run software state machines over it. You can decode the same capture as multiple protocols, decide on parameters after seeing the data, etc.
 
@@ -140,7 +184,35 @@ This is the headline Stage 5 capability: `sniff.i2c_start/stop` (observe-mode) u
 // → {"artifact_path": ".../decoder_spi_<id>.parquet", "count": N, ...}
 ```
 
-### 4. Idle timeout (auto-release hardware)
+### 6. Play an arbitrary waveform on AWG W1 from a .npy file
+
+`awg.configure` covers the built-in functions (Sine/Square/Triangle/RampUp/RampDown/DC/Noise). For anything else — recorded data, a custom envelope, a PWM-encoded message — use `awg.upload_custom`. Samples come from a `.npy` file on the server's filesystem, must be 1-D, and must be in the range [-1.0, 1.0] (they're scaled by `amplitude_v` at upload time).
+
+```jsonc
+{"name": "waveforms.open", "arguments": {}}
+
+// Author the waveform offline (numpy, Python, ...) and save to disk as 1-D float64:
+//   import numpy as np
+//   t = np.linspace(0, 1, 4096, endpoint=False)
+//   samples = np.sin(2*np.pi*5*t) * np.exp(-3*t)   // 5 Hz damped sine
+//   np.save("/tmp/damped_sine.npy", samples.astype(np.float64))
+
+{"name": "awg.upload_custom", "arguments": {
+  "channel": 1,
+  "samples_npy_path": "/tmp/damped_sine.npy",
+  "amplitude_v": 2.0
+}}
+// → {"uploaded": true, "channel": 1, "n_samples": 4096}
+
+{"name": "awg.start", "arguments": {"channel": 1}}
+// W1 now plays the damped sine, peak ±2.0 V.
+
+{"name": "awg.stop", "arguments": {"channel": 1}}
+```
+
+The waveform loops indefinitely until `awg.stop` or `waveforms.close`. The playback frequency depends on the AD3's hardware sample clock; configure that separately via `awg.configure` if you need a specific repetition rate.
+
+### 7. Idle timeout (auto-release hardware)
 
 The server tracks `_last_activity` per tool call and closes the device after `idle_timeout_s` (default 10 min). The next `call_tool` invocation returns `{"error": {"type": "DwfDeviceLost", ...}}`. The LLM can re-`waveforms.open` to recover.
 
