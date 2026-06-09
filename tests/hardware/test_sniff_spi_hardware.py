@@ -79,7 +79,7 @@ async def test_sniff_spi_captures_external_transfer(app, jumperless, tmp_path: P
 
     start = await app.call_tool("sniff.spi_start", {
         "clk_pin": "dio0", "mosi_pin": "dio1", "miso_pin": "dio2",
-        "cs_pin": "dio3", "mode": 0, "freq_hz": 100_000,
+        "cs_pin": "dio3", "mode": 0, "freq_hz": 100_000, "max_duration_s": 1.0,
     })
     sniff_id = start["sniff_id"]
     # Let DigitalIn record_loop arm + poll at least once before firing stimulus.
@@ -123,7 +123,7 @@ async def test_sniff_spi_lost_samples_zero(app, jumperless, tmp_path: Path) -> N
 
     start = await app.call_tool("sniff.spi_start", {
         "clk_pin": "dio0", "mosi_pin": "dio1", "miso_pin": "dio2",
-        "cs_pin": "dio3", "mode": 0, "freq_hz": 100_000,
+        "cs_pin": "dio3", "mode": 0, "freq_hz": 100_000, "max_duration_s": 1.0,
     })
     await asyncio.sleep(0.1)
 

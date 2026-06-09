@@ -162,7 +162,7 @@ def test_spi_start_returns_sniff_id(sniff: Sniff) -> None:
     fake.set_logic_record_status_sequence([(10, 0, 1), (0, 0, 0)])
 
     async def run() -> dict:
-        result = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000)
+        result = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
         await sniff.spi_stop(result["sniff_id"])
         return result
 
@@ -180,7 +180,7 @@ def test_release_cancels_active_spi_sessions(sniff: Sniff) -> None:
 
     async def run() -> tuple[asyncio.Task, asyncio.Task | None]:
         start = await sniff.spi_start(
-            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000,
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1,
         )
         session = sniff._spi_sessions[start["sniff_id"]]
         record_task = session.task
@@ -205,7 +205,7 @@ def test_spi_status_reports_samples(sniff: Sniff) -> None:
     fake.set_logic_record_status_sequence([(len(samples), 0, 1), (0, 0, 0)])
 
     async def run() -> tuple[dict, dict]:
-        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000)
+        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
         await asyncio.sleep(0.05)
         status = sniff.spi_status(start["sniff_id"])
         stop_result = await sniff.spi_stop(start["sniff_id"])
@@ -226,7 +226,7 @@ def test_spi_status_reports_done(sniff: Sniff) -> None:
 
     async def run() -> dict:
         start = await sniff.spi_start(
-            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000,
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1,
         )
         await asyncio.sleep(0.05)  # let record_loop poll once
         status = sniff.spi_status(start["sniff_id"])
@@ -248,7 +248,7 @@ def test_spi_stop_decodes_and_writes_parquet(sniff: Sniff) -> None:
     async def run() -> dict:
         start = await sniff.spi_start(
             clk_pin="dio0", mosi_pin="dio1", miso_pin="dio2", cs_pin="dio3",
-            mode=0, freq_hz=100_000,
+            mode=0, freq_hz=100_000, max_duration_s=0.1,
         )
         await asyncio.sleep(0.05)
         return await sniff.spi_stop(start["sniff_id"])
@@ -283,7 +283,7 @@ def test_spi_stop_pin_map_uses_dio_number_not_list_index(sniff: Sniff) -> None:
     async def run() -> dict:
         start = await sniff.spi_start(
             clk_pin="dio4", mosi_pin="dio5", miso_pin="dio6", cs_pin="dio7",
-            mode=0, freq_hz=100_000,
+            mode=0, freq_hz=100_000, max_duration_s=0.1,
         )
         await asyncio.sleep(0.05)
         return await sniff.spi_stop(start["sniff_id"])
@@ -296,12 +296,23 @@ def test_spi_stop_pin_map_uses_dio_number_not_list_index(sniff: Sniff) -> None:
     )
 
 
+def test_spi_start_memory_cap_raises(sniff: Sniff) -> None:
+    """sniff.spi_start must enforce the 32 MB raw memory cap like the other
+    async sniff tools."""
+    # freq_hz=10e6 → sample_rate=100MHz, 2 pins, 3600s → ~720 GB → way over.
+    with pytest.raises(ValueError, match="32 MB"):
+        asyncio.run(sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", mode=0,
+            freq_hz=10_000_000, max_duration_s=3600.0,
+        ))
+
+
 def test_spi_stop_releases_observer_claim(sniff: Sniff) -> None:
     fake: FakeBackend = sniff.device.backend  # type: ignore
     fake.set_logic_record_status_sequence([(0, 0, 0)])
 
     async def run() -> None:
-        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000)
+        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
         await sniff.spi_stop(start["sniff_id"])
 
     asyncio.run(run())

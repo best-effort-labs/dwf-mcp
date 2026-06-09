@@ -75,7 +75,7 @@ SNIFF_CAN_SCHEMA: dict[str, Any] = {
 
 SPI_START_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["clk_pin", "mosi_pin", "mode", "freq_hz"],
+    "required": ["clk_pin", "mosi_pin", "mode", "freq_hz", "max_duration_s"],
     "properties": {
         "clk_pin": {"type": "string", "pattern": _PIN_RE},
         "mosi_pin": {"type": "string", "pattern": _PIN_RE},
@@ -83,6 +83,7 @@ SPI_START_SCHEMA: dict[str, Any] = {
         "cs_pin": {"type": "string", "pattern": _PIN_RE},
         "mode": {"type": "integer", "enum": [0, 1, 2, 3]},
         "freq_hz": {"type": "number", "minimum": 1.0},
+        "max_duration_s": {"type": "number", "minimum": 0.001, "maximum": 3600.0},
         "poll_interval_s": {"type": "number", "default": 0.010},
         "output_path": {"type": "string"},
     },
@@ -407,16 +408,15 @@ class Sniff(Instrument):
         mosi_pin: str,
         mode: int,
         freq_hz: float,
+        max_duration_s: float,
         miso_pin: str | None = None,
         cs_pin: str | None = None,
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
     ) -> dict[str, Any]:
-        # TODO(stage5+): sniff.spi_start predates the memory cap + reaping discipline of
-        # sniff.{i2c,uart,can}_start. Consider migrating to _async_sessions and the
-        # check_memory_cap path so SPI sessions are bounded and reapable.
         sample_rate_hz = freq_hz * 10  # 10× oversampling
         pins = [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None]
+        check_memory_cap(sample_rate_hz, max_duration_s, n_pins=len(pins))
         pin_mask = sum(1 << int(p[3:]) for p in pins)
 
         sniff_id = str(uuid.uuid4())
@@ -425,6 +425,7 @@ class Sniff(Instrument):
             "sniff_id": sniff_id,
             "pins": pins,
             "sample_rate_hz": sample_rate_hz,
+            "max_duration_s": max_duration_s,
             "clk_pin": clk_pin,
             "mosi_pin": mosi_pin,
             "miso_pin": miso_pin,
@@ -437,13 +438,15 @@ class Sniff(Instrument):
             allocator_key=allocator_key,
             pin_mask=pin_mask,
             sample_rate_hz=sample_rate_hz,
-            max_duration_s=3600.0,  # open-ended; spi_stop terminates capture
+            max_duration_s=max_duration_s,
             meta=meta,
         )
         self._spi_sessions[sniff_id] = session
+        reap_completed_sessions(self._spi_sessions, self.device)
         return {"sniff_id": sniff_id}
 
     def spi_status(self, sniff_id: str) -> dict[str, Any]:
+        reap_completed_sessions(self._spi_sessions, self.device)
         session = self._spi_sessions.get(sniff_id)
         if session is None:
             raise ValueError(f"unknown sniff_id {sniff_id!r}")
