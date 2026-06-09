@@ -159,3 +159,67 @@ def test_decode_framing_error_when_stop_bit_low() -> None:
     assert len(frames) >= 1
     assert frames[0].framing_error is True
     assert frames[0].error is True
+
+
+# --- Streaming API tests --------------------------------------------------
+
+def test_streaming_single_chunk_matches_oneshot() -> None:
+    """init/feed/finalize on one whole chunk must produce the same frames as decode()."""
+    samples = _uart_samples(b"Hello", baud=9600, sample_rate_hz=96000.0)
+    one_shot = UartDecoder().decode(
+        samples, {"rx": 0}, sample_rate_hz=96000.0,
+        baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0,
+    )
+    streaming = UartDecoder()
+    streaming.init({"rx": 0}, sample_rate_hz=96000.0,
+                   baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0)
+    out = streaming.feed(samples)
+    out.extend(streaming.finalize())
+    assert len(out) == len(one_shot)
+    for a, b in zip(out, one_shot):
+        assert a.data == b.data
+        assert a.timestamp_s == b.timestamp_s
+        assert a.error == b.error
+
+
+def test_streaming_arbitrary_chunk_boundaries() -> None:
+    """Chunking the same buffer at every possible cut-point yields the same
+    frames as the one-shot decode. This is the streaming correctness proof."""
+    samples = _uart_samples(b"abc", baud=9600, sample_rate_hz=96000.0)
+    expected = UartDecoder().decode(
+        samples, {"rx": 0}, sample_rate_hz=96000.0,
+        baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0,
+    )
+    # Cut the buffer in halves and thirds at varied positions; each split
+    # must produce frames identical to the one-shot output.
+    n = samples.shape[0]
+    for cut in (n // 4, n // 3, n // 2, 2 * n // 3, 3 * n // 4):
+        decoder = UartDecoder()
+        decoder.init({"rx": 0}, sample_rate_hz=96000.0,
+                     baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0)
+        got = decoder.feed(samples[:cut])
+        got.extend(decoder.feed(samples[cut:]))
+        got.extend(decoder.finalize())
+        assert len(got) == len(expected), f"cut={cut} produced {len(got)} != {len(expected)}"
+        for a, b in zip(got, expected):
+            assert a.data == b.data, f"cut={cut} data mismatch"
+            assert abs(a.timestamp_s - b.timestamp_s) < 1e-9
+
+
+def test_streaming_chunk_inside_frame_carries_correctly() -> None:
+    """Cut a chunk in the middle of a UART frame. The frame must be emitted
+    on the second feed() call with the correct timestamp."""
+    samples = _uart_samples(b"X", baud=9600, sample_rate_hz=96000.0)
+    # 'X' is one frame (~10 bit-times × 10 samples). Cut right in the data
+    # bits — say at 50 samples in.
+    cut = 50
+    decoder = UartDecoder()
+    decoder.init({"rx": 0}, sample_rate_hz=96000.0,
+                 baud=9600, data_bits=8, parity="none", stop_bits=1, polarity=0)
+    first = decoder.feed(samples[:cut])
+    # The frame should NOT have emitted yet — it's still in the carry.
+    assert first == []
+    second = decoder.feed(samples[cut:])
+    second.extend(decoder.finalize())
+    assert len(second) == 1
+    assert second[0].data == b"X"

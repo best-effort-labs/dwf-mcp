@@ -111,13 +111,55 @@ class I2cTransaction:
 
 
 class Decoder(ABC):
+    """Protocol decoder. Stateful — supports either one-shot ``decode(samples)``
+    or streaming via ``init/feed/finalize``.
+
+    Subclasses MUST implement ``init`` (set up state), ``feed`` (process a
+    chunk, return any transactions completed by it), and ``finalize`` (flush
+    pending state and return any transactions still open).
+
+    The default ``decode`` is a convenience wrapper that runs the full
+    init→feed→finalize cycle on a single sample array.
+    """
+
     protocol_name: ClassVar[str]
 
     @abstractmethod
+    def init(
+        self,
+        pin_map: dict[str, int],
+        sample_rate_hz: float,
+        **config: Any,
+    ) -> None:
+        """Initialize per-stream state. Called once before any ``feed`` call.
+
+        Raises ``ValueError`` if config is malformed (e.g. non-positive sample
+        rate, insufficient oversampling).
+        """
+        ...
+
+    @abstractmethod
+    def feed(self, samples: np.ndarray) -> list[Any]:
+        """Process the next chunk of samples and return any transactions/frames
+        that completed within this chunk. Subsequent calls continue from where
+        the previous one left off."""
+        ...
+
+    @abstractmethod
+    def finalize(self) -> list[Any]:
+        """Flush any pending state and return transactions that were still in
+        progress at end-of-stream. Called once after the last ``feed``."""
+        ...
+
     def decode(
         self,
         samples: np.ndarray,      # (n_samples, 16) uint8
         pin_map: dict[str, int],  # signal name → column index
+        sample_rate_hz: float,
         **config: Any,
     ) -> list[Any]:
-        ...
+        """One-shot convenience wrapper around init / feed / finalize."""
+        self.init(pin_map, sample_rate_hz=sample_rate_hz, **config)
+        out = self.feed(samples)
+        out.extend(self.finalize())
+        return out
