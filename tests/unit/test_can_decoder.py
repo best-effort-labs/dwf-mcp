@@ -7,15 +7,34 @@ import pytest
 from dwf_mcp.instruments.decoder.can import CanDecoder, can_crc15
 
 
-def _can_bits(frame_id: int, data: bytes, rtr: bool = False) -> list[int]:
-    """Build raw bit stream for a standard CAN frame (no bit-stuffing yet)."""
+def _can_bits(
+    frame_id: int, data: bytes, rtr: bool = False, extended: bool = False,
+) -> list[int]:
+    """Build the raw bit stream for a Classical CAN frame (no bit-stuffing yet).
+
+    Standard frame layout: SOF | ID[10:0] | RTR | IDE=0 | r0 | DLC[3:0] | DATA | CRC15 | CRC delim | ACK | ACK delim | EOF×7
+    Extended frame layout: SOF | base ID[10:0] | SRR=1 | IDE=1 | ext ID[17:0] | RTR | r1 | r0 | DLC[3:0] | DATA | CRC15 | …
+    """
     bits: list[int] = []
     bits.append(0)  # SOF dominant
-    for i in range(11):
-        bits.append((frame_id >> (10 - i)) & 1)
-    bits.append(1 if rtr else 0)  # RTR
-    bits.append(0)  # IDE = 0 (standard)
-    bits.append(0)  # r0
+    if extended:
+        base = (frame_id >> 18) & 0x7FF
+        ext = frame_id & 0x3FFFF
+        for i in range(11):
+            bits.append((base >> (10 - i)) & 1)
+        bits.append(1)  # SRR (always recessive in extended frames)
+        bits.append(1)  # IDE = 1
+        for i in range(18):
+            bits.append((ext >> (17 - i)) & 1)
+        bits.append(1 if rtr else 0)  # RTR
+        bits.append(0)  # r1
+        bits.append(0)  # r0
+    else:
+        for i in range(11):
+            bits.append((frame_id >> (10 - i)) & 1)
+        bits.append(1 if rtr else 0)  # RTR
+        bits.append(0)  # IDE = 0 (standard)
+        bits.append(0)  # r0
     dlc = len(data)
     for i in range(4):
         bits.append((dlc >> (3 - i)) & 1)
@@ -76,6 +95,63 @@ def test_decode_simple_can_frame() -> None:
     assert frames[0].rtr is False
     assert frames[0].crc_valid is True
     assert frames[0].error is False
+
+
+def test_decode_extended_29bit_frame() -> None:
+    """29-bit identifier (IDE=1) decodes with extended=True and the full ID."""
+    # 0x1A2B3C4 has bits in both the base (top 11) and extension (low 18) halves.
+    fid = 0x1A2B3C4
+    bits = _stuff(_can_bits(fid, b"\xCA\xFE", extended=True))
+    samples = _samples_from_bits(bits, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    decoder = CanDecoder()
+    frames = decoder.decode(samples, {"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+    assert len(frames) == 1
+    assert frames[0].frame_id == fid
+    assert frames[0].extended is True
+    assert frames[0].rtr is False
+    assert frames[0].data == b"\xCA\xFE"
+    assert frames[0].crc_valid is True
+    assert frames[0].error is False
+
+
+def test_decode_extended_rtr_frame() -> None:
+    """Extended remote frame: extended=True, rtr=True, no data."""
+    bits = _stuff(_can_bits(0x1ABCDEF, b"", rtr=True, extended=True))
+    samples = _samples_from_bits(bits, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    decoder = CanDecoder()
+    frames = decoder.decode(samples, {"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+    assert len(frames) == 1
+    assert frames[0].extended is True
+    assert frames[0].rtr is True
+    assert frames[0].frame_id == 0x1ABCDEF
+    assert frames[0].data == b""
+    assert frames[0].error is False
+
+
+def test_decode_extended_full_id_range() -> None:
+    """Full 29-bit ID (all bits set) decodes correctly."""
+    bits = _stuff(_can_bits(0x1FFFFFFF, b"\x00", extended=True))
+    samples = _samples_from_bits(bits, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    decoder = CanDecoder()
+    frames = decoder.decode(samples, {"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+    assert frames[0].frame_id == 0x1FFFFFFF
+    assert frames[0].extended is True
+
+
+def test_decode_mixes_standard_and_extended_frames() -> None:
+    """A buffer with one standard then one extended frame decodes both correctly."""
+    std_bits = _stuff(_can_bits(0x123, b"\x11"))
+    ext_bits = _stuff(_can_bits(0x1A2B3C4, b"\x22", extended=True))
+    samples_std = _samples_from_bits(std_bits, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    samples_ext = _samples_from_bits(ext_bits, bitrate=100_000, sample_rate_hz=2_000_000.0)
+    combined = np.concatenate([samples_std, samples_ext], axis=0)
+    decoder = CanDecoder()
+    frames = decoder.decode(combined, {"rx": 0}, sample_rate_hz=2_000_000.0, bitrate=100_000)
+    good = [f for f in frames if not f.error]
+    assert len(good) >= 2
+    by_id = {(f.extended, f.frame_id): f for f in good}
+    assert (False, 0x123) in by_id
+    assert (True, 0x1A2B3C4) in by_id
 
 
 def test_decode_max_dlc_frame() -> None:

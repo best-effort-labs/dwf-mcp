@@ -1,4 +1,4 @@
-"""Software CAN decoder for raw DigitalIn captures (Standard 11-bit IDs)."""
+"""Software CAN decoder for raw DigitalIn captures (Classical CAN; 11- or 29-bit IDs)."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -42,7 +42,8 @@ class CanDecoder(Decoder):
         Users with an inverting transceiver must invert upstream.
 
     Supported:
-        - Standard 11-bit identifiers.
+        - Standard 11-bit identifiers (IDE=0) and extended 29-bit identifiers
+          (IDE=1, with the 18 extra arbitration bits + SRR + r1).
         - DLC 0-8 with the matching data field. Raw DLC values 9-15 are
           preserved in the decoded frame but flagged ``error_type="form"``;
           the data field is read as 8 bytes (per classic CAN spec).
@@ -51,7 +52,6 @@ class CanDecoder(Decoder):
 
     Out of scope (not implemented; would require additional state):
         - CAN FD frames (BRS, ESI, 17/21-bit CRC).
-        - 29-bit extended identifiers (IDE=1 raises a form error).
         - Error / overload frame detection.
         - ACK delimiter validation.
         - Sample-point tuning (fixed at 75 %).
@@ -150,7 +150,7 @@ def _parse_can_frame(
     uses this to advance past the frame without re-counting stuffing.
 
     Raises ``_CanParseError`` on protocol violations (missing stuff bit,
-    extended IDs, etc.)."""
+    error frames, FD, etc.)."""
     state = {"bit_idx": 0, "last": -1, "run": 0}
     consumed: list[int] = []
 
@@ -177,14 +177,30 @@ def _parse_can_frame(
 
     if next_logical() != 0:
         raise _CanParseError("form", "SOF not dominant")
-    frame_id = 0
+    base_id = 0
     for _ in range(11):
-        frame_id = (frame_id << 1) | next_logical()
-    rtr = bool(next_logical())
+        base_id = (base_id << 1) | next_logical()
+    # This bit is RTR for standard frames, SRR (substitute remote request,
+    # always recessive=1) for extended frames. The IDE bit that follows
+    # disambiguates.
+    rtr_or_srr = next_logical()
     ide = next_logical()
-    if ide != 0:
-        raise _CanParseError("form", "extended IDs not supported")
-    _ = next_logical()  # r0 (reserved)
+    if ide == 0:
+        # Standard 11-bit frame
+        frame_id = base_id
+        extended = False
+        rtr = bool(rtr_or_srr)
+        _ = next_logical()  # r0 (reserved)
+    else:
+        # Extended 29-bit frame: 18 more ID bits, then real RTR + r1 + r0.
+        ext_id = 0
+        for _ in range(18):
+            ext_id = (ext_id << 1) | next_logical()
+        frame_id = (base_id << 18) | ext_id
+        extended = True
+        rtr = bool(next_logical())
+        _ = next_logical()  # r1 (reserved)
+        _ = next_logical()  # r0 (reserved)
     dlc_raw = 0
     for _ in range(4):
         dlc_raw = (dlc_raw << 1) | next_logical()
@@ -229,7 +245,7 @@ def _parse_can_frame(
     frame = CanFrame(
         timestamp_s=timestamp_s,
         frame_id=frame_id,
-        extended=False,
+        extended=extended,
         rtr=rtr,
         dlc=dlc_raw,
         data=bytes(data_bytes),
