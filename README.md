@@ -184,6 +184,28 @@ If the decoder can't keep up with the chunk rate (rare for I2C/UART at typical r
 // → {"artifact_path": ".../decoder_spi_<id>.parquet", "count": N, ...}
 ```
 
+**For protocols beyond the built-in four (i2c, uart, spi, can):** the captured `.npz` can be decoded with [`sigrok-cli`](https://sigrok.org/wiki/Sigrok-cli) (which ships ~150 libsigrokdecode protocols — DS18B20, MDIO, JTAG, USB-LS, OneWire, SDQ, etc.). There is no dedicated MCP tool — a calling agent with shell + Python access can:
+
+```bash
+# 1. Convert the npz channels to sigrok's binary input format (~5 lines)
+python3 -c "
+import numpy as np
+arr = np.load('/workspace/logic_<id>.npz')['data']  # shape (n_samples, 16) uint8 per-pin
+# pack the active channels into one byte per sample, LSB = lowest pin index
+packed = np.packbits(arr[:, :8][:, ::-1], axis=1).squeeze().tobytes()
+open('/tmp/cap.bin', 'wb').write(packed)
+"
+
+# 2. Decode (here: DS18B20 OneWire on dio0; substitute your protocol + pin map)
+sigrok-cli -I binary:numchannels=8:samplerate=10000000 -i /tmp/cap.bin \
+  -P onewire_link:owr=0,onewire_network,onewire_transport,ds18b20 \
+  -A ds18b20
+
+# 3. Parse annotation lines (one per decoded event) into transactions
+```
+
+`sigrok-cli -L` lists all available decoders; `sigrok-cli --show-pd protocol_id` describes one. The ~100ms-per-call startup is fine for one-shot post-process. If you need this often, wrap steps 1-3 in a helper script.
+
 ### 6. Play an arbitrary waveform on AWG W1 from a .npy file
 
 `awg.configure` covers the built-in functions (Sine/Square/Triangle/RampUp/RampDown/DC/Noise). For anything else — recorded data, a custom envelope, a PWM-encoded message — use `awg.upload_custom`. Samples come from a `.npy` file on the server's filesystem, must be 1-D, and must be in the range [-1.0, 1.0] (they're scaled by `amplitude_v` at upload time).
