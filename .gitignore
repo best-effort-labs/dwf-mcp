@@ -10,3 +10,4 @@ build/
 
 # Runtime-generated audit log written by SafetyPolicy.gate_output
 dwf-safety.log
+captures/
