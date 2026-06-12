@@ -21,7 +21,37 @@ cd dwf-mcp
 pip install -e ".[vcd,dev]"
 ```
 
-Requires the WaveForms runtime (which provides `libdwf`) and Python 3.11+. macOS: `brew install --cask digilent-waveforms`. Linux: install WaveForms from Digilent.
+Requires the WaveForms runtime (which provides `libdwf`) and Python 3.11+. macOS: `brew install --cask digilent-waveforms`. Linux: see below.
+
+### Linux
+
+Verified end-to-end on Ubuntu 24.04 (x86_64): full unit suite + all 24 hardware tests against an AD3 + Jumperless V5. Two Digilent packages are required — both download without a login from Digilent's [previous-releases pages](https://digilent.com/reference/software/waveforms/waveforms-3/previous-versions):
+
+```bash
+curl -fsSO "https://files.digilent.com/Software/Adept2%20Runtime/2.27.9/digilent.adept.runtime_2.27.9-amd64.deb"
+curl -fsSO "https://files.digilent.com/Software/Waveforms/3.25.1/digilent.waveforms_3.25.1_amd64.deb"
+sudo mkdir -p /usr/share/desktop-directories   # headless only: WaveForms postinst runs xdg-desktop-menu, which exits nonzero without this
+sudo apt install ./digilent.adept.runtime_*.deb ./digilent.waveforms_*.deb
+```
+
+- `libdwf.so` comes from the WaveForms package (`pydwf` is a ctypes wrapper around it, no compiled code of its own); the Adept Runtime provides the USB plumbing and the udev rules that make the AD3 accessible without root.
+- The `mkdir` line is the only headless accommodation needed — without it the package lands half-configured (`iF` in `dpkg -l`) and `apt` reports an error.
+
+If using a Jumperless V5 for hardware-test auto-wiring:
+
+- Add yourself to `dialout` for `/dev/ttyACM*` access: `sudo usermod -aG dialout $USER` (takes effect at next login).
+- **Minimal/cloud kernels lack `cdc_acm`.** Ubuntu cloud images ship the `virtual` kernel flavor, which omits USB serial drivers entirely — the Jumperless enumerates on the bus but no `/dev/ttyACM*` nodes ever appear, with nothing in dmesg to say why. Fix: `sudo apt install linux-modules-extra-$(uname -r)`.
+- Port discovery needs no changes: Linux exposes per-interface product strings (e.g. `ttyACM2` → "Jumperless V5 - JL Micropython REPL"), so the sorted-port-order assumption from macOS holds.
+
+### Deploying in a VM (QEMU / KVM / Proxmox)
+
+Verified on Proxmox 8 with both devices USB-passed-through. Hard-won notes:
+
+- **The CPU model must expose x86-64-v2.** NumPy ≥ 2 aborts on import under the default `qemu64`/`kvm64` model (`NumPy was built with baseline optimizations: (X86_V2) but your machine doesn't support...`). On Proxmox set `cpu: host`.
+- Pass devices by vendor:product — AD3 = `1443:7003` (Digilent's own VID, not FTDI), Jumperless V5 = `1d50:acab` — with `usb3=1` on the AD3 entry. USB config changes only apply on a full VM stop/start, not a guest-initiated reboot.
+- **The AD3's host-side USB link must not be SuperSpeed.** Through some paths (observed with a fiber-optic USB extender) the AD3 links at USB 3.0, and QEMU's emulated xHCI then silently black-holes bulk transfers: device *enumeration still succeeds* (descriptor reads only), but `FDwfDeviceOpen` blocks forever with a completely clean guest dmesg. Plugged directly into a host port the link comes up Hi-Speed (480M) and everything works. Corollary: a successful `enumerateDevices()` does not prove the passthrough is healthy — verify `open()` too.
+- After a hung open, the AD3 can wedge and vanish from the guest until physically unplugged and replugged.
+- Emulated-USB latency spikes can occasionally overflow streaming-capture buffers: a one-off nonzero `lost_samples` failure in the hardware suite (e.g. `logic.record` at 1 MHz) is more likely flake than regression in a VM — rerun before debugging.
 
 ## Run
 
