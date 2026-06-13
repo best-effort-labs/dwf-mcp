@@ -68,6 +68,7 @@ class PydwfBackend(DwfBackend):
                     serial=serial,
                     model=name,
                     firmware="",  # filled on open (best-effort)
+                    devid=int(enum.deviceType(i)[0]),
                     sample_rate_max_hz=125_000_000,  # AD3 nominal; refine on open
                     dio_count=16,
                     analog_in_channels=2,
@@ -93,14 +94,21 @@ class PydwfBackend(DwfBackend):
             firmware = self._dwf.getVersion()
         except Exception:
             firmware = ""
+        ai = device.analogIn
+        di = device.digitalIn
+        devid, _hwrev = enum.deviceType(target_index)
         info = DeviceInfo(
             serial=enum.serialNumber(target_index),
             model=enum.deviceName(target_index),
             firmware=firmware,
-            sample_rate_max_hz=125_000_000,
-            dio_count=16,
-            analog_in_channels=2,
-            analog_out_channels=2,
+            devid=int(devid),
+            sample_rate_max_hz=float(ai.frequencyInfo()[1]),
+            dio_count=int(di.bitsInfo()),
+            analog_in_channels=int(ai.channelCount()),
+            analog_out_channels=int(device.analogOut.count()),
+            analog_in_buffer_max=int(ai.bufferSizeInfo()[1]),
+            digital_in_buffer_max=int(di.bufferSizeInfo()),
+            digital_word_width=int(di.bitsInfo()),
         )
         self._device = device
         self._info = info
