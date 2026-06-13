@@ -463,3 +463,16 @@ async def test_unsupported_instrument_returns_error(tmp_path, monkeypatch) -> No
     result = await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
     assert result["error"]["type"] == "InstrumentNotConfigured"
     assert "not available on this device" in result["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_open_passes_device_config_strategy_to_backend(tmp_path) -> None:
+    """waveforms.open(device_config=...) plumbs the strategy down to the backend,
+    and the tool schema advertises the available strategies to the client."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {"device_config": "max_digital_in"})
+    assert app.device.backend.last_device_config == "max_digital_in"
+    # Schema advertises the enum so an LLM can discover/choose it.
+    enum = app._tool_schemas["waveforms.open"]["properties"]["device_config"]["enum"]
+    assert "max_digital_in" in enum and "default" in enum

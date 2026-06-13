@@ -62,10 +62,10 @@ class DwfDevice:
             return False
         return True
 
-    def open(self, serial: str | None = None) -> DeviceInfo:
+    def open(self, serial: str | None = None, device_config: str | None = None) -> DeviceInfo:
         if self.is_open:
             return self._info  # type: ignore[return-value]
-        info = self.backend.open(serial=serial)
+        info = self.backend.open(serial=serial, device_config=device_config)
         try:
             self.profile = resolve_profile(info.devid)
             self.inventory = build_inventory(self.profile, info)

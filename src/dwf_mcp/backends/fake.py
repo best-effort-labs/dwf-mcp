@@ -45,6 +45,7 @@ class FakeBackend(DwfBackend):
     def __init__(self, devices: list[DeviceInfo] | None = None) -> None:
         self._devices = devices or [_FAKE_DEVICE]
         self._open_info: DeviceInfo | None = None
+        self.last_device_config: str | None = None
         # Scope (AnalogIn) state
         self.scope_calls: list[tuple[str, dict[str, Any]]] = []
         self._scope_canned: dict[int, np.ndarray[Any, Any]] = {}
@@ -109,7 +110,10 @@ class FakeBackend(DwfBackend):
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
 
-    def open(self, serial: str | None = None) -> DeviceInfo:
+    def open(self, serial: str | None = None, device_config: str | None = None) -> DeviceInfo:
+        # The fake has no hardware config table; record the requested strategy so
+        # tests can assert it was plumbed through, but otherwise ignore it.
+        self.last_device_config = device_config
         if self._open_info is not None:
             return self._open_info
         candidates = [d for d in self._devices if serial is None or d.serial == serial]

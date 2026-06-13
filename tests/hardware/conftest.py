@@ -61,15 +61,23 @@ def jumperless(pytestconfig: pytest.Config):
         j.close()
 
 
-@pytest.fixture
-def app():
-    a = build_app(backend_name="pydwf")
-    # Target a specific connected device by serial via DWF_TEST_SERIAL; otherwise
-    # open whichever device enumerates first. Useful with several Discoverys
-    # attached (only one can be wired to the Jumperless at a time).
+def _open_args(request: pytest.FixtureRequest) -> dict:
+    """Open args honoring DWF_TEST_SERIAL (which device) and a @device_config
+    marker (which hardware config strategy, e.g. 'max_digital_in')."""
+    args: dict = {}
     serial = os.environ.get("DWF_TEST_SERIAL")
-    open_args = {"device_serial": serial} if serial else {}
-    asyncio.run(a.call_tool("waveforms.open", open_args))
+    if serial:
+        args["device_serial"] = serial
+    marker = request.node.get_closest_marker("device_config")
+    if marker:
+        args["device_config"] = marker.args[0]
+    return args
+
+
+@pytest.fixture
+def app(request):
+    a = build_app(backend_name="pydwf")
+    asyncio.run(a.call_tool("waveforms.open", _open_args(request)))
     try:
         yield a
     finally:
@@ -77,12 +85,11 @@ def app():
 
 
 @pytest.fixture
-def device(tmp_path):
-    """An opened DwfDevice on the DUT (honors DWF_TEST_SERIAL), with a permissive
-    safety policy so functional hardware tests aren't blocked by caps. Instrument
-    hardware tests must use this instead of constructing their own device, so every
-    hardware test runs on the *same* selected device (not whichever enumerates
-    first)."""
+def device(tmp_path, request):
+    """An opened DwfDevice on the DUT (honors DWF_TEST_SERIAL and a @device_config
+    marker), with a permissive safety policy so functional hardware tests aren't
+    blocked by caps. Instrument hardware tests must use this instead of constructing
+    their own device, so every hardware test runs on the *same* selected device."""
     from dwf_mcp.allocator import PinAllocator
     from dwf_mcp.backends.pydwf_backend import PydwfBackend
     from dwf_mcp.device import DwfDevice
@@ -97,7 +104,8 @@ def device(tmp_path):
         allocator=PinAllocator(),  # configured from the device profile at open
         workspace=tmp_path, idle_timeout_s=60,
     )
-    dev.open(serial=os.environ.get("DWF_TEST_SERIAL"))
+    args = _open_args(request)
+    dev.open(serial=args.get("device_serial"), device_config=args.get("device_config"))
     try:
         yield dev
     finally:

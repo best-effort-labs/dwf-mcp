@@ -14,6 +14,7 @@ the libdwf runtime version string as a best-effort "firmware" field.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -23,6 +24,7 @@ from pydwf import (  # type: ignore[import-untyped]
     DwfAcquisitionMode,
     DwfAnalogCoupling,
     DwfAnalogOutNode,
+    DwfEnumConfigInfo,
     DwfEnumFilter,
     DwfLibrary,
     DwfState,
@@ -31,6 +33,7 @@ from pydwf import (  # type: ignore[import-untyped]
 )
 
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfBackendError
+from dwf_mcp.devices.configs import DeviceConfig, resolve_config_index
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +49,22 @@ class PydwfBackend(DwfBackend):
         self._spi_cs_idx: int | None = None
         self._spi_cs_assert_level = 0
         self._spi_cs_idle_level = 1
+        # Config table of the open device (populated at open, for status reporting).
+        self._configs: list[DeviceConfig] = []
+
+    def _query_configs(self, device_index: int) -> list[DeviceConfig]:
+        ee = self._dwf.deviceEnum
+        nc = ee.enumerateConfigurations(device_index)
+        return [
+            DeviceConfig(
+                index=c,
+                digital_in_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.DigitalInBufferSize)),
+                analog_in_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.AnalogInBufferSize)),
+                analog_out_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.AnalogOutBufferSize)),
+                digital_out_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.DigitalOutBufferSize)),
+            )
+            for c in range(nc)
+        ]
 
     # DwfEnumFilter.Type tells libdwf to interpret the low bits as connection-type flags
     # rather than the legacy device-type codes (where 1 = Electronics Explorer).
@@ -78,7 +97,7 @@ class PydwfBackend(DwfBackend):
             )
         return out
 
-    def open(self, serial: str | None = None) -> DeviceInfo:
+    def open(self, serial: str | None = None, device_config: str | None = None) -> DeviceInfo:
         if self._info is not None:
             return self._info
         enum = self._dwf.deviceEnum
@@ -90,7 +109,23 @@ class PydwfBackend(DwfBackend):
                 break
         if target_index is None:
             raise DwfBackendError(f"no Digilent device matches serial {serial!r}")
-        device = self._dwf.deviceControl.open(target_index)
+        # Pick a hardware configuration. On the AD1/AD2 (shared IOs) configs trade
+        # off buffer allocation; the SDK default has a small DigitalIn buffer. The
+        # caller's strategy ("max_digital_in" etc.) resolves to a config index via
+        # the device's config table. DWF_DEVICE_CONFIG is a raw-index override.
+        self._configs = self._query_configs(target_index)
+        env = os.environ.get("DWF_DEVICE_CONFIG")
+        config_index = int(env) if env else resolve_config_index(self._configs, device_config)
+        try:
+            device = self._dwf.deviceControl.open(target_index, config_index)
+        except Exception:
+            # A failed open can leave a stale handle that cascades into later opens;
+            # clear all handles so the next attempt starts clean.
+            try:
+                self._dwf.deviceControl.closeAll()
+            except Exception as exc:
+                log.warning("closeAll after failed open: %s", exc)
+            raise
         try:
             firmware = self._dwf.getVersion()
         except Exception:

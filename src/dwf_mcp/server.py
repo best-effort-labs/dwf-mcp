@@ -11,6 +11,7 @@ from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.backend import DwfBackend, DwfDeviceLost
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
+from dwf_mcp.devices.configs import CONFIG_STRATEGIES
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.instruments.awg import AWG
 from dwf_mcp.instruments.can import CAN
@@ -82,14 +83,35 @@ class DwfMcpApp:
 
     def _register_meta_tools(self) -> None:
         meta_schema = {"type": "object", "properties": {}}
-        for name, handler in [
-            ("waveforms.open", self._tool_open),
-            ("waveforms.close", self._tool_close),
-            ("waveforms.status", self._tool_status),
-            ("waveforms.list_pins", self._tool_list_pins),
+        open_schema = {
+            "type": "object",
+            "properties": {
+                "device_serial": {
+                    "type": "string",
+                    "description": "Open a specific device by serial; omit to use the first found.",
+                },
+                "device_config": {
+                    "type": "string",
+                    "enum": list(CONFIG_STRATEGIES),
+                    "description": (
+                        "Hardware configuration strategy. On shared-IO devices "
+                        "(Analog Discovery 1/2) buffers trade off, so choose by intent: "
+                        "'max_digital_in' before high-rate logic/protocol sniffing, "
+                        "'max_analog_in' before long analog records, else 'default'. "
+                        "Changing it later requires a close + re-open."
+                    ),
+                },
+                "workspace_dir": {"type": "string"},
+            },
+        }
+        for name, handler, schema in [
+            ("waveforms.open", self._tool_open, open_schema),
+            ("waveforms.close", self._tool_close, meta_schema),
+            ("waveforms.status", self._tool_status, meta_schema),
+            ("waveforms.list_pins", self._tool_list_pins, meta_schema),
         ]:
             self._tools[name] = self._wrap_meta_handler(handler)
-            self._tool_schemas[name] = meta_schema
+            self._tool_schemas[name] = schema
 
     @staticmethod
     def _wrap_meta_handler(handler: Any) -> Any:
@@ -223,7 +245,8 @@ class DwfMcpApp:
             self.device.workspace = Path(workspace_dir)
             self.artifacts = ArtifactWriter(workspace=self.device.workspace)
         serial = kwargs.pop("device_serial", None)
-        info = self.device.open(serial=serial)
+        device_config = kwargs.pop("device_config", None)
+        info = self.device.open(serial=serial, device_config=device_config)
         return {
             "device": {
                 "serial": info.serial,
@@ -231,6 +254,8 @@ class DwfMcpApp:
                 "firmware": info.firmware,
                 "sample_rate_max_hz": info.sample_rate_max_hz,
                 "dio_count": info.dio_count,
+                "digital_in_buffer_max": info.digital_in_buffer_max,
+                "analog_in_buffer_max": info.analog_in_buffer_max,
             },
             "workspace": str(self.device.workspace),
         }

@@ -27,7 +27,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-pytestmark = pytest.mark.hardware
+pytestmark = [pytest.mark.hardware, pytest.mark.device_config("max_digital_in")]
 
 
 @pytest.fixture(scope="module")

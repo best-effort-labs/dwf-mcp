@@ -10,6 +10,8 @@ class _Enum:
     def serialNumber(self, _i): return "SN123"
     def deviceName(self, _i): return "Analog Discovery 3"
     def deviceType(self, _i): return (10, 3)  # (devid, hwrev)
+    def enumerateConfigurations(self, _i): return 1
+    def configInfo(self, _c, _info): return 16384
 
 
 def _fake_device():
@@ -29,9 +31,11 @@ def test_open_populates_caps_from_device() -> None:
     b._info = None
     b._spi_cs_idx = None
     b._ENUM_FILTER = 0
-    b._dwf = SimpleNamespace(deviceEnum=_Enum(),
-                             deviceControl=SimpleNamespace(open=lambda i: _fake_device()),
-                             getVersion=lambda: "fw")
+    b._dwf = SimpleNamespace(
+        deviceEnum=_Enum(),
+        deviceControl=SimpleNamespace(open=lambda i, c=None: _fake_device(),
+                                      closeAll=lambda: None),
+        getVersion=lambda: "fw")
     info = b.open()
     assert info.devid == 10
     assert info.sample_rate_max_hz == 100_000_000.0

@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.hardware
+pytestmark = [pytest.mark.hardware, pytest.mark.device_config("max_digital_in")]
 
 
 @pytest.fixture(scope="module")

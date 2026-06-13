@@ -28,7 +28,7 @@ import pytest
 
 from tests.hardware.conftest import wait_for_sniff_claim
 
-pytestmark = pytest.mark.hardware
+pytestmark = [pytest.mark.hardware, pytest.mark.device_config("max_digital_in")]
 
 
 @pytest.fixture(scope="module")
