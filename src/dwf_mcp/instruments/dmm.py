@@ -55,6 +55,7 @@ class DMM(Instrument):
             while time.monotonic() < deadline:
                 if self.device.backend.dmm_status() == "Done":
                     break
+                time.sleep(0.002)  # yield the core instead of busy-waiting
             else:
                 raise RuntimeError("DMM acquisition timed out after 2s")
             samples = self.device.backend.dmm_read(channel, n_averages)

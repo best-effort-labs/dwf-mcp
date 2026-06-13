@@ -180,6 +180,7 @@ class Logic(Instrument):
         while time.monotonic() < deadline:
             if self.device.backend.logic_status() == "Done":
                 break
+            time.sleep(0.002)  # yield the core instead of busy-waiting
         else:
             raise RuntimeError("logic capture did not complete before deadline")
 

@@ -216,6 +216,7 @@ class Scope(Instrument):
         while time.monotonic() < deadline:
             if self.device.backend.scope_status() == "Done":
                 break
+            time.sleep(0.002)  # yield the core instead of busy-waiting
         else:
             raise RuntimeError("scope capture did not complete before deadline")
 
