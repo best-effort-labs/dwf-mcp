@@ -268,6 +268,15 @@ The waveform loops indefinitely until `awg.stop` or `waveforms.close`. The playb
 
 The server tracks `_last_activity` per tool call and closes the device after `idle_timeout_s` (default 10 min). The next `call_tool` invocation returns `{"error": {"type": "DwfDeviceLost", ...}}`. The LLM can re-`waveforms.open` to recover.
 
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — layered design, safety model,
+  pin allocator, streaming/record, observe-mode sniff, backend contract. For
+  developers extending the server and agents needing a deeper mental model.
+- [docs/troubleshooting.md](docs/troubleshooting.md) — known limitations
+  (including device unplug), Linux/VM hardware-setup gotchas, safety-policy
+  behavior, the sniff memory cap, and a common-error table.
+
 ## Architecture
 
 Three layers:
@@ -283,8 +292,8 @@ Three layers:
 ## Testing
 
 ```bash
-pytest tests/unit                 # 338 tests, no hardware
-pytest tests/hardware -m hardware # 24 tests, requires AD3 (+ Jumperless V5 for protocol sniff tests)
+pytest tests/unit                 # ~400 tests, no hardware
+pytest tests/hardware -m hardware # 27 tests, requires AD3 (+ Jumperless V5 for protocol sniff tests)
 ruff check src/ tests/
 mypy src/
 ```
@@ -296,7 +305,7 @@ mypy src/
 ```
 src/dwf_mcp/
   server.py              # DwfMcpApp + stdio MCP entry point
-  device.py              # DwfDevice: lazy open / idle / unplug recovery
+  device.py              # DwfDevice: lazy open / idle close / safety gate
   policy.py              # SafetyPolicy
   allocator.py           # PinAllocator, claim / claim_observe
   artifacts.py           # ArtifactWriter (npz / parquet + JSON sidecar)
