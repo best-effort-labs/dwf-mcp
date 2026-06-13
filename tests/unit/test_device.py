@@ -266,3 +266,62 @@ def test_gate_output_supply_neg_over_cap_raises(tmp_path) -> None:
     device.gate_output("supply_enable", channel="neg", voltage=-3.0)  # within cap
     with pytest.raises(SafetyViolation):
         device.gate_output("supply_enable", channel="neg", voltage=-5.0)
+
+
+def _md_device(tmp_path):
+    return DwfDevice(backend=FakeBackend(), policy=SafetyPolicy(),
+                     allocator=PinAllocator(), workspace=tmp_path, idle_timeout_s=60)
+
+
+def test_open_configures_allocator_from_profile(tmp_path) -> None:
+    d = _md_device(tmp_path)
+    d.open()
+    names = {g.name for g in d.allocator.resource_groups}
+    assert names == {"scope_pair", "awg_clock"}
+    assert d.profile.name == "Analog Discovery 3"
+    assert d.inventory.is_valid_pin("dio15")
+
+
+def test_close_resets_allocator_configuration(tmp_path) -> None:
+    d = _md_device(tmp_path)
+    d.open()
+    d.close()
+    assert d.allocator.resource_groups == []
+    assert d.profile is None
+
+
+def test_md_validate_pin_rejects_out_of_range(tmp_path) -> None:
+    d = _md_device(tmp_path)
+    d.open()
+    d.validate_pin("dio15")  # ok
+    with pytest.raises(ValueError, match="dio16"):
+        d.validate_pin("dio16")
+
+
+def test_md_validate_rate_uses_queried_max(tmp_path) -> None:
+    d = _md_device(tmp_path)
+    d.open()
+    d.validate_rate(100_000_000.0)  # ok (fake reports 100 MHz)
+    with pytest.raises(ValueError, match="exceeds"):
+        d.validate_rate(125_000_000.0)
+
+
+def test_open_unknown_devid_closes_backend(tmp_path) -> None:
+    from dwf_mcp.backends.fake import make_fake_device
+    from dwf_mcp.devices.profiles import UnsupportedDeviceError
+    backend = FakeBackend(devices=[make_fake_device(devid=99)])
+    d = DwfDevice(backend=backend, policy=SafetyPolicy(),
+                  allocator=PinAllocator(), workspace=tmp_path, idle_timeout_s=60)
+    with pytest.raises(UnsupportedDeviceError):
+        d.open()
+    assert not backend.is_open  # open-failure cleanup closed it
+    assert d.profile is None
+
+
+def test_close_fires_on_close_hook(tmp_path) -> None:
+    d = _md_device(tmp_path)
+    fired = {"n": 0}
+    d.on_close = lambda: fired.__setitem__("n", fired["n"] + 1)
+    d.open()
+    d.close()
+    assert fired["n"] == 1

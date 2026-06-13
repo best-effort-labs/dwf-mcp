@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfDeviceLost
+from dwf_mcp.devices.inventory import PinInventory, build_inventory
+from dwf_mcp.devices.profiles import DeviceProfile, resolve_profile
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 
 log = logging.getLogger(__name__)
@@ -44,6 +48,9 @@ class DwfDevice:
         self._info: DeviceInfo | None = None
         self._last_activity: float | None = None
         self._serial_request: str | None = None
+        self.profile: DeviceProfile | None = None
+        self.inventory: PinInventory | None = None
+        self.on_close: Callable[[], None] | None = None
 
     @property
     def is_open(self) -> bool:
@@ -51,8 +58,7 @@ class DwfDevice:
             return False
         # If backend dropped out from under us (unplug), reflect that.
         if not self.backend.is_open:
-            self._info = None
-            self.allocator.clear()
+            self.close()
             return False
         return True
 
@@ -60,23 +66,68 @@ class DwfDevice:
         if self.is_open:
             return self._info  # type: ignore[return-value]
         info = self.backend.open(serial=serial)
+        try:
+            self.profile = resolve_profile(info.devid)
+            self.inventory = build_inventory(self.profile, info)
+            self.allocator.configure(
+                known_pins=self.inventory.all_known(),
+                resource_groups=self.profile.build_resource_groups(
+                    analog_in_channels=info.analog_in_channels,
+                    user_awg_count=self.profile.user_awg_count,
+                ),
+            )
+        except Exception:
+            self.profile = None
+            self.inventory = None
+            self.allocator.reset_configuration()
+            with contextlib.suppress(Exception):
+                self.backend.close()
+            raise
         self._info = info
         self._serial_request = serial
         self.mark_activity()
         return info
 
     def close(self) -> None:
-        self.allocator.clear()
+        self.allocator.reset_configuration()
         if self.backend.is_open:
             self.backend.close()
         self._info = None
+        self.profile = None
+        self.inventory = None
         self._last_activity = None
+        if self.on_close is not None:
+            self.on_close()
 
     def require_open(self) -> DeviceInfo:
         if not self.is_open:
             raise DwfDeviceLost("device session is not open (closed, unplugged, or idle-expired)")
         self.mark_activity()
         return self._info  # type: ignore[return-value]
+
+    def validate_pin(self, pin: str) -> None:
+        if self.inventory is None or not self.inventory.is_valid_pin(pin):
+            raise ValueError(f"pin {pin!r} is not available on {self._device_name()}")
+
+    def validate_channel(self, channel: int, kind: str) -> None:
+        assert self._info is not None
+        count = (self._info.analog_in_channels if kind == "scope"
+                 else self.profile.user_awg_count if self.profile else 0)
+        if not (1 <= channel <= count):
+            raise ValueError(
+                f"{kind} channel {channel} out of range 1..{count} on {self._device_name()}"
+            )
+
+    def validate_rate(self, rate_hz: float) -> None:
+        assert self._info is not None
+        if rate_hz > self._info.sample_rate_max_hz:
+            raise ValueError(
+                f"sample_rate_hz {rate_hz} exceeds device max "
+                f"{self._info.sample_rate_max_hz} on {self._device_name()}"
+            )
+
+    def _device_name(self) -> str:
+        return self.profile.name if self.profile else "no device"
 
     def mark_activity(self) -> None:
         self._last_activity = time.monotonic()
