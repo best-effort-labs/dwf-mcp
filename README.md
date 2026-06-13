@@ -312,10 +312,6 @@ src/dwf_mcp/
       {spi,i2c,uart,can}.py
       __init__.py        # decoder.{spi,i2c,uart,can} MCP tools
     _async_sniff.py      # shared observe-mode session infrastructure
-
-docs/superpowers/specs/   # stage design docs
-docs/superpowers/plans/   # stage implementation plans
-docs/plans/               # earlier per-stage plans
 ```
 
 ## License
