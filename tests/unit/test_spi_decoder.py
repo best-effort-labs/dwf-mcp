@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from dwf_mcp.instruments.decoder.spi import SpiDecoder
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dwf_mcp.allocator import PinAllocator, PinAllocationError
+from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice

@@ -23,8 +23,6 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
-
 from dwf_mcp.streaming import RecordingSession, process_chunk, record_loop
 
 log = logging.getLogger(__name__)
@@ -220,9 +218,8 @@ async def _quiesce_and_drain(
     session: _AsyncSniffSession, device: Any
 ) -> None:
     """Cancel the background record task, stop hardware, and drain any final
-    samples into ``session.record_session.chunks``. Shared by both
-    ``stop_observe_session`` (concatenate path) and ``stream_observe_session``
-    (per-chunk decode path)."""
+    samples into ``session.record_session.chunks``. Used by
+    ``stream_observe_session`` (per-chunk decode path)."""
     r = session.record_session
     if r.task is not None:
         r.task.cancel()
@@ -251,33 +248,6 @@ async def _quiesce_and_drain(
         except Exception as exc:
             r.error = str(exc)
             r.done = True
-
-
-async def stop_observe_session(
-    session: _AsyncSniffSession, device: Any
-) -> tuple[np.ndarray, int]:
-    """Cancel the record task, drain remaining samples, stop the hardware.
-
-    Returns ``(samples, lost_samples)`` where ``samples`` is the concatenation
-    of all chunks captured so far (zero-row ``(0, 16)`` array if none) and
-    ``lost_samples`` is the cumulative loss count reported by the backend.
-
-    The caller is responsible for releasing the allocator claim
-    (``device.allocator.release(session.allocator_key)``) once any
-    protocol-specific decoding has completed.
-
-    Prefer :func:`stream_observe_session` when a decoder is available — it
-    feeds chunks through the decoder one at a time, avoiding the 2× memory
-    spike from ``np.concatenate``.
-    """
-    await _quiesce_and_drain(session, device)
-    r = session.record_session
-    samples = (
-        np.concatenate(r.chunks, axis=0)
-        if r.chunks
-        else np.zeros((0, 16), dtype=np.uint8)
-    )
-    return samples, r.lost_samples
 
 
 async def stream_observe_session(

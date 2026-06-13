@@ -5,7 +5,6 @@ Usage: pytest tests/hardware/diag_can2.py -v --no-header -m hardware -s
 """
 from __future__ import annotations
 import time
-import ctypes
 import pytest
 
 
@@ -224,7 +223,7 @@ def test_can_diag2(app) -> None:
             time.sleep(0.005)
 
         if not got_any:
-            print(f"  ✗ No frame decoded")
+            print("  ✗ No frame decoded")
 
         dout.reset()
 

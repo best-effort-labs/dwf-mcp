@@ -16,7 +16,6 @@ from dwf_mcp.instruments._async_sniff import (
     check_memory_cap,
     reap_completed_sessions,
     start_observe_session,
-    stop_observe_session,
     stream_observe_session,
 )
 from dwf_mcp.instruments.decoder.can import CanDecoder

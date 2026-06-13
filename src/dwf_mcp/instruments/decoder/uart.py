@@ -117,7 +117,6 @@ class UartDecoder(Decoder):
         samples_per_bit = self._samples_per_bit
         data_bits = self._data_bits
         parity = self._parity
-        stop_bits = self._stop_bits
         total_bits_needed = self._total_bits
         base_ts = self._consumed_total / self._sample_rate_hz
 

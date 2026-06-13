@@ -439,7 +439,7 @@ def test_jumperless_w2_pull(app, jumperless) -> None:
         jumperless.disconnect(row_num, "ADC0")
         return v
 
-    print(f"\n=== Part F: W2 row voltage before/after W1->CH1_POS ===")
+    print("\n=== Part F: W2 row voltage before/after W1->CH1_POS ===")
     print(f"  W1=row{w1_row}, CH1_POS=row{ch1_pos_row}, W2=row{w2_row}, CH2_POS=row{ch2_pos_row}")
 
     # Step 1: W2->CH2_POS + CH2_NEG->GND only
