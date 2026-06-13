@@ -46,14 +46,37 @@ def process_chunk(session: RecordingSession, chunk: np.ndarray) -> None:
         session.chunks.append(chunk)
 
 
+_MAX_POLL_INTERVAL_S = 0.010
+_MIN_POLL_INTERVAL_S = 0.001
+# Read when the record buffer is at most this full, leaving headroom for read +
+# decode time before the next poll.
+_POLL_FILL_FRACTION = 0.4
+
+
+def compute_poll_interval(buffer_size: int, sample_rate_hz: float) -> float:
+    """Pick a record-loop poll interval that can't let the device buffer overflow.
+
+    The buffer fills in ``buffer_size / sample_rate`` seconds; we poll at a
+    fraction of that (clamped to [1 ms, 10 ms]). Small-buffer devices (the
+    original Analog Discovery has a 4096-sample DigitalIn buffer vs the AD3's
+    16384) poll faster so they don't drop samples; slow captures stay at the
+    10 ms default.
+    """
+    if sample_rate_hz <= 0 or buffer_size <= 0:
+        return _MAX_POLL_INTERVAL_S
+    fill_time = buffer_size / sample_rate_hz
+    return max(_MIN_POLL_INTERVAL_S, min(_MAX_POLL_INTERVAL_S, fill_time * _POLL_FILL_FRACTION))
+
+
 async def record_loop(
     session: RecordingSession,
     poll_fn: Callable[[], tuple[int, int, int]],
     read_fn: Callable[[int], np.ndarray],
+    poll_interval_s: float = _MAX_POLL_INTERVAL_S,
 ) -> None:
     try:
         while not session.done:
-            await asyncio.sleep(0.010)
+            await asyncio.sleep(poll_interval_s)
             available, lost, remaining = poll_fn()
             session.lost_samples += lost
             if available > 0:

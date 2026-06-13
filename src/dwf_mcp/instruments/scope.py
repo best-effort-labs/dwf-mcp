@@ -17,6 +17,7 @@ from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.streaming import (
     RecordingSession,
+    compute_poll_interval,
     flush_pending_notifications,
     notification_loop,
     process_chunk,
@@ -328,12 +329,16 @@ class Scope(Instrument):
                 "output_path": output_path,
             },
         )
+        poll_interval_s = compute_poll_interval(
+            self.device.require_open().analog_in_buffer_max, sample_rate_hz
+        )
         try:
             session.task = asyncio.create_task(
                 record_loop(
                     session,
                     self.device.backend.scope_record_status,
                     self.device.backend.scope_record_read,
+                    poll_interval_s=poll_interval_s,
                 )
             )
             if on_chunk is not None:
