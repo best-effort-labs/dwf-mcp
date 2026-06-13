@@ -76,6 +76,40 @@ def app():
         asyncio.run(a.call_tool("waveforms.close", {}))
 
 
+@pytest.fixture
+def device(tmp_path):
+    """An opened DwfDevice on the DUT (honors DWF_TEST_SERIAL), with a permissive
+    safety policy so functional hardware tests aren't blocked by caps. Instrument
+    hardware tests must use this instead of constructing their own device, so every
+    hardware test runs on the *same* selected device (not whichever enumerates
+    first)."""
+    from dwf_mcp.allocator import PinAllocator
+    from dwf_mcp.backends.pydwf_backend import PydwfBackend
+    from dwf_mcp.device import DwfDevice
+    from dwf_mcp.policy import SafetyPolicy
+
+    dev = DwfDevice(
+        backend=PydwfBackend(),
+        policy=SafetyPolicy(
+            supply_max_voltage_pos=5.0, supply_max_voltage_neg=-5.0,
+            supply_max_current=1.0, awg_max_amplitude=5.0,
+        ),
+        allocator=PinAllocator(),  # configured from the device profile at open
+        workspace=tmp_path, idle_timeout_s=60,
+    )
+    dev.open(serial=os.environ.get("DWF_TEST_SERIAL"))
+    try:
+        yield dev
+    finally:
+        dev.close()
+
+
+@pytest.fixture
+def artifacts(device):
+    from dwf_mcp.artifacts import ArtifactWriter
+    return ArtifactWriter(workspace=device.workspace)
+
+
 @pytest.fixture(autouse=True)
 def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config):
     marker = request.node.get_closest_marker("jumperless")
