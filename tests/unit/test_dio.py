@@ -10,7 +10,7 @@ from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.devices.ad3 import AD3_RESOURCE_GROUPS
 from dwf_mcp.instruments.dio import DIO
-from dwf_mcp.policy import SafetyPolicy
+from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 
 
 @pytest.fixture
@@ -60,6 +60,42 @@ def test_set_writes_hardware_and_releases_claim(dio: DIO) -> None:
     assert direction_calls[0][1]["output"] is True
     assert len(set_calls) == 1
     assert set_calls[0][1]["state"] is True
+
+
+def test_set_records_safety_log_entry(dio: DIO) -> None:
+    """Driving a DIO pin high enables a hardware output, so it must route through
+    gate_output and be recorded in the safety log (the output-enabling invariant)."""
+    import json
+    dio.set_direction(pin="dio0", direction="out")
+    dio.set(pin="dio0", state=1)
+    lines = [
+        json.loads(line)
+        for line in (dio.device.workspace / "dwf-safety.log").read_text().splitlines()
+        if line.strip()
+    ]
+    assert lines[-1]["kind"] == "dio_set"
+    assert lines[-1]["rejected"] is False
+
+
+def test_set_rejected_when_policy_voltage_unsatisfiable(tmp_path: Path) -> None:
+    """DIO output is fixed 3.3 V hardware, same as the pattern generator. A policy
+    whose voltage can't be met by hardware must reject dio.set, just like pattern."""
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(pattern_voltage="5.0"),
+        allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    device.open()
+    dio = DIO(device=device, artifacts=ArtifactWriter(workspace=tmp_path))
+    dio.set_direction(pin="dio0", direction="out")
+    with pytest.raises(SafetyViolation):
+        dio.set(pin="dio0", state=1)
+    # Rejected before any hardware write, and the claim is released.
+    fake: FakeBackend = device.backend  # type: ignore[assignment]
+    assert [c for c in fake.dio_calls if c[0] == "set"] == []
+    assert device.allocator.claimed_pins() == {}
 
 
 def test_read_releases_claim(dio: DIO) -> None:

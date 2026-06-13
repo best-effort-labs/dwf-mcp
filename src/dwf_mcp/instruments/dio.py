@@ -65,6 +65,11 @@ class DIO(Instrument):
             )
         self.device.allocator.claim("dio", [pin])
         try:
+            # Driving a pin high enables a hardware output — route through the
+            # safety gate (logs to dwf-safety.log; enforces the fixed-3.3 V policy)
+            # before touching hardware. The finally below releases the claim if the
+            # gate rejects.
+            self.device.gate_output("dio_set", pin=pin, state=int(state))
             self.device.backend.dio_set_direction(pin_idx=_pin_idx(pin), output=True)
             self.device.backend.dio_set(pin_idx=_pin_idx(pin), state=bool(state))
         finally:
