@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import warnings
 
@@ -63,7 +64,12 @@ def jumperless(pytestconfig: pytest.Config):
 @pytest.fixture
 def app():
     a = build_app(backend_name="pydwf")
-    asyncio.run(a.call_tool("waveforms.open", {}))
+    # Target a specific connected device by serial via DWF_TEST_SERIAL; otherwise
+    # open whichever device enumerates first. Useful with several Discoverys
+    # attached (only one can be wired to the Jumperless at a time).
+    serial = os.environ.get("DWF_TEST_SERIAL")
+    open_args = {"device_serial": serial} if serial else {}
+    asyncio.run(a.call_tool("waveforms.open", open_args))
     try:
         yield a
     finally:
