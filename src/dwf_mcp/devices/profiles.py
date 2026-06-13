@@ -24,6 +24,9 @@ class DeviceProfile:
     user_awg_count: int
     supported_instruments: frozenset[str]
     dio_voltage_options: list[float]
+    # Rail -> fixed voltage for devices whose supplies are NOT programmable (the
+    # original Analog Discovery has fixed +5/-5 V rails). None = programmable.
+    fixed_supply_voltages: dict[str, float] | None = None
 
     def build_resource_groups(
         self, analog_in_channels: int, user_awg_count: int
@@ -39,20 +42,26 @@ class DeviceProfile:
         ]
 
 
-def _classic(devid: int, name: str) -> DeviceProfile:
+def _classic(
+    devid: int, name: str, *, fixed_supply_voltages: dict[str, float] | None = None
+) -> DeviceProfile:
     """The classic Analog Discovery topology (AD1/AD2/AD3): 2 user AWG channels,
-    all instruments, fixed 3.3 V DIO. They differ only by devid + name."""
+    all instruments, fixed 3.3 V DIO. They differ by devid + name (and the AD1's
+    supplies are fixed rather than programmable)."""
     return DeviceProfile(
         devid=devid,
         name=name,
         user_awg_count=2,
         supported_instruments=_ALL_INSTRUMENTS,
         dio_voltage_options=[3.3],
+        fixed_supply_voltages=fixed_supply_voltages,
     )
 
 
 PROFILE_REGISTRY: dict[int, DeviceProfile] = {
-    2: _classic(2, "Analog Discovery"),
+    # The original Analog Discovery has fixed +5/-5 V supplies (not programmable).
+    2: _classic(2, "Analog Discovery", fixed_supply_voltages={"vpos": 5.0, "vneg": -5.0}),
+    # AD2 supplies are believed programmable; confirm when one is connected.
     3: _classic(3, "Analog Discovery 2"),
     10: _classic(10, "Analog Discovery 3"),
 }

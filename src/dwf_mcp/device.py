@@ -126,6 +126,18 @@ class DwfDevice:
                 f"{self._info.sample_rate_max_hz} on {self._device_name()}"
             )
 
+    def validate_supply_voltage(self, channel: str, voltage: float) -> None:
+        """On devices with fixed (non-programmable) supplies, reject any voltage
+        other than the rail's fixed value. No-op for programmable supplies."""
+        fixed = self.profile.fixed_supply_voltages if self.profile else None
+        if fixed is not None and channel in fixed:
+            expected = fixed[channel]
+            if abs(voltage - expected) > 1e-6:
+                raise ValueError(
+                    f"supply rail {channel!r} on {self._device_name()} is fixed at "
+                    f"{expected} V; cannot set {voltage} V"
+                )
+
     def _device_name(self) -> str:
         return self.profile.name if self.profile else "no device"
 

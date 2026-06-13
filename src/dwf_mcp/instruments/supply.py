@@ -52,6 +52,9 @@ class Supply(Instrument):
     ) -> dict[str, Any]:
         if channel not in self._layout:
             raise ValueError(f"unknown supply channel {channel!r}; have {sorted(self._layout)}")
+        # Devices with fixed supplies (the original AD) only accept their rail's
+        # fixed voltage; reject anything else before staging.
+        self.device.validate_supply_voltage(channel, voltage)
         ch_idx, nodes = self._layout[channel]
         # If the channel is already energized, changing its setpoint writes live
         # hardware — route through the safety gate exactly like enable() so an
