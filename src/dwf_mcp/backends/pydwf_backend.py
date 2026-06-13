@@ -14,6 +14,8 @@ the libdwf runtime version string as a best-effort "firmware" field.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -39,6 +41,10 @@ class PydwfBackend(DwfBackend):
         self._dwf = DwfLibrary()
         self._device: Any | None = None
         self._info: DeviceInfo | None = None
+        # SPI chip-select state, set by spi_configure (None = no CS pin).
+        self._spi_cs_idx: int | None = None
+        self._spi_cs_assert_level = 0
+        self._spi_cs_idle_level = 1
 
     # DwfEnumFilter.Type tells libdwf to interpret the low bits as connection-type flags
     # rather than the legacy device-type codes (where 1 = Electronics Explorer).
@@ -600,6 +606,12 @@ class PydwfBackend(DwfBackend):
             raise DwfBackendError("device not open")
         return self._device.protocol.spi
 
+    # SPI wire constants for the ProtocolSPI API:
+    #   transfer_type 1 = standard MOSI/MISO (vs 0=SISO, 2=dual, 4=quad)
+    #   bits_per_word 8 = one byte per data-word; payloads are passed as word lists.
+    _SPI_TRANSFER_TYPE = 1
+    _SPI_BITS_PER_WORD = 8
+
     def spi_configure(
         self, clk_idx: int, freq_hz: float, mode: int,
         mosi_idx: int | None, miso_idx: int | None, cs_idx: int | None,
@@ -615,21 +627,47 @@ class PydwfBackend(DwfBackend):
             spi.dataSet(0, mosi_idx)   # DQ0 = MOSI
         if miso_idx is not None:
             spi.dataSet(1, miso_idx)   # DQ1 = MISO
+        # CS is driven explicitly via select() around each transfer (see _cs_bracket),
+        # so record the pin + asserted/idle levels rather than relying on auto-CS.
+        self._spi_cs_idx = cs_idx
         if cs_idx is not None:
-            polarity = 0 if cs_polarity == "active_low" else 1
-            spi.selectSet(cs_idx, polarity)
+            active_low = cs_polarity == "active_low"
+            self._spi_cs_assert_level = 0 if active_low else 1
+            self._spi_cs_idle_level = 1 if active_low else 0
+            spi.select(cs_idx, self._spi_cs_idle_level)  # park CS deasserted
+
+    @contextmanager
+    def _cs_bracket(self, assert_cs: bool) -> Iterator[None]:
+        """Assert CS (active level) on entry and return it to idle on exit — even
+        if the wrapped transfer raises — when assert_cs is set and a CS pin is
+        configured. A no-op otherwise."""
+        active = assert_cs and self._spi_cs_idx is not None
+        if active:
+            self._spi.select(self._spi_cs_idx, self._spi_cs_assert_level)
+        try:
+            yield
+        finally:
+            if active:
+                self._spi.select(self._spi_cs_idx, self._spi_cs_idle_level)
 
     def spi_transfer(self, data: bytes, assert_cs: bool) -> bytes:
-        rx = self._spi.writeRead(1, 8, list(data))  # 1=MOSI/MISO, 8 bits/word
+        with self._cs_bracket(assert_cs):
+            rx = self._spi.writeRead(
+                self._SPI_TRANSFER_TYPE, self._SPI_BITS_PER_WORD, list(data)
+            )
         return bytes(rx)
 
     def spi_write(self, data: bytes, assert_cs: bool) -> None:
-        dcs = 1 if assert_cs else 0
-        self._spi.write(dcs, len(data) * 8, list(data))
+        with self._cs_bracket(assert_cs):
+            self._spi.write(
+                self._SPI_TRANSFER_TYPE, self._SPI_BITS_PER_WORD, list(data)
+            )
 
     def spi_read(self, length: int, assert_cs: bool) -> bytes:
-        dcs = 1 if assert_cs else 0
-        rx = self._spi.read(dcs, length * 8)
+        with self._cs_bracket(assert_cs):
+            rx = self._spi.read(
+                self._SPI_TRANSFER_TYPE, self._SPI_BITS_PER_WORD, length
+            )
         return bytes(rx)
 
     # --- UART (ProtocolUART) --------------------------------------------------
