@@ -93,3 +93,32 @@ async def notification_loop(
             await on_chunk(session.record_id, item)
         except Exception:  # swallow; never block recording
             log.warning("notification send failed for record_id=%r", session.record_id)
+
+
+async def flush_pending_notifications(
+    session: RecordingSession, final_chunks: list[np.ndarray]
+) -> None:
+    """Deliver to ``on_chunk`` any queue items the notification loop didn't get to
+    (because record_stop cancelled it), followed by the final chunks drained at
+    stop, in order.
+
+    Called from record_stop *after* the notification task is cancelled. Items the
+    notification loop already delivered were removed from the queue, so there is no
+    double-send; the final drained chunks never entered the queue, so they are not
+    duplicated either. A no-op when the session has no async ``on_chunk`` consumer.
+    """
+    if session.on_chunk is None:
+        return
+    pending: list[np.ndarray] = []
+    while True:
+        try:
+            item = session.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        if item is not None:  # skip the record_loop end-of-stream sentinel
+            pending.append(item)
+    for chunk in (*pending, *final_chunks):
+        try:
+            await session.on_chunk(session.record_id, chunk)
+        except Exception:  # swallow; matches notification_loop semantics
+            log.warning("final notification send failed for record_id=%r", session.record_id)

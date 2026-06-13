@@ -304,3 +304,31 @@ async def test_record_start_vcd_disabled_raises(logic: Logic) -> None:
         await logic.record_start(
             pins=["dio0"], sample_rate_hz=1_000_000.0, duration_s=0.01, format="vcd"
         )
+
+
+@pytest.mark.asyncio
+async def test_record_stop_delivers_final_drained_chunk_to_on_chunk(logic: Logic) -> None:
+    """The samples drained at record_stop (read after the record loop ended) must
+    still reach a live on_chunk subscriber, not just the artifact file. Previously
+    record_stop cancelled the notification task before draining, so the final
+    chunk was silently dropped from the live stream."""
+    fake: FakeBackend = logic.device.backend  # type: ignore[assignment]
+    final_chunk = np.zeros((5, 16), dtype=np.uint8)
+    final_chunk[:, 0] = 1
+    fake.set_logic_record_chunks([final_chunk])
+    # Loop sees (0,0,0) → done immediately (reads nothing); drain then sees (5,0,0).
+    fake.set_logic_record_status_sequence([(0, 0, 0), (5, 0, 0)])
+
+    received: list[np.ndarray] = []
+
+    async def on_chunk(record_id: str, chunk: np.ndarray) -> None:
+        received.append(chunk)
+
+    start = await logic.record_start(
+        pins=["dio0"], sample_rate_hz=1_000_000, duration_s=0.01, on_chunk=on_chunk,
+    )
+    await asyncio.sleep(0.05)  # let the record loop finish
+    await logic.record_stop(record_id=start["record_id"])
+
+    assert len(received) == 1, "final drained chunk did not reach on_chunk"
+    assert received[0].shape[0] == 5

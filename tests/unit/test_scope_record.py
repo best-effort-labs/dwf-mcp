@@ -164,3 +164,28 @@ async def test_record_after_stop_is_possible(scope: Scope) -> None:
         channels=[1], range_v=5.0, sample_rate_hz=10_000.0, duration_s=0.01
     )
     assert "record_id" in result2
+
+
+@pytest.mark.asyncio
+async def test_record_stop_delivers_final_drained_chunk_to_on_chunk(scope: Scope) -> None:
+    """Samples drained at scope.record_stop must still reach a live on_chunk
+    subscriber, not just the artifact (same fix as logic.record_stop)."""
+    fake: FakeBackend = scope.device.backend  # type: ignore[assignment]
+    fake._scope_record_canned_chunk = np.ones((4, 2), dtype=np.float64)  # noqa: SLF001
+    # Loop sees (0,0,0) → done immediately (reads nothing); drain then sees (4,0,0).
+    fake.set_scope_record_status_sequence([(0, 0, 0), (4, 0, 0)])
+
+    received: list[np.ndarray] = []
+
+    async def on_chunk(record_id: str, chunk: np.ndarray) -> None:
+        received.append(chunk)
+
+    start = await scope.record_start(
+        channels=[1], range_v=5.0, sample_rate_hz=10_000.0, duration_s=0.01,
+        on_chunk=on_chunk,
+    )
+    await asyncio.sleep(0.05)
+    await scope.record_stop(record_id=start["record_id"])
+
+    assert len(received) == 1, "final drained chunk did not reach on_chunk"
+    assert received[0].shape[0] == 4

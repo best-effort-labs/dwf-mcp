@@ -15,7 +15,13 @@ from dwf_mcp import vcd_writer
 from dwf_mcp.artifacts import ArtifactWriter, CaptureSummary
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
-from dwf_mcp.streaming import RecordingSession, notification_loop, process_chunk, record_loop
+from dwf_mcp.streaming import (
+    RecordingSession,
+    flush_pending_notifications,
+    notification_loop,
+    process_chunk,
+    record_loop,
+)
 
 log = logging.getLogger(__name__)
 
@@ -379,6 +385,7 @@ class Logic(Instrument):
             except Exception as exc:
                 log.warning("logic_record_stop failed: %s", exc)
             # 3. Drain any remaining available samples.
+            final_chunks: list[np.ndarray] = []
             try:
                 available, lost, _ = self.device.backend.logic_record_status()
                 session.lost_samples += lost
@@ -386,10 +393,18 @@ class Logic(Instrument):
                     chunk = self.device.backend.logic_record_read(available)
                     try:
                         process_chunk(session, chunk)
+                        final_chunks.append(chunk)
                     except Exception as exc:
                         log.warning("drain process_chunk failed: %s", exc)
             except Exception as exc:
                 log.warning("drain after logic_record_stop failed: %s", exc)
+            # Deliver leftover queued notifications + the final drained chunk to
+            # on_chunk (its task was cancelled above) so a live subscriber gets
+            # the tail of the capture, not just the artifact file.
+            try:
+                await flush_pending_notifications(session, final_chunks)
+            except Exception as exc:
+                log.warning("flush_pending_notifications failed: %s", exc)
             # 4. Write artifact (best-effort).
             artifact_path: str | None = None
             artifact_error: str | None = None
