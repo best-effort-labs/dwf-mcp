@@ -22,7 +22,6 @@ import numpy as np
 from pydwf import (  # type: ignore[import-untyped]
     DwfAcquisitionMode,
     DwfAnalogCoupling,
-    DwfDeviceParameter,
     DwfEnumFilter,
     DwfLibrary,
     DwfState,
@@ -118,16 +117,14 @@ class PydwfBackend(DwfBackend):
 
     @property
     def is_open(self) -> bool:
-        if self._info is None or self._device is None:
-            return False
-        # Probe the live USB link so an unplugged device is detected — the cached
-        # _info alone can't tell. paramGet does a real device transaction (~0.02 ms
-        # on an AD3) and raises if the device is gone.
-        try:
-            self._device.paramGet(DwfDeviceParameter.OnClose)
-        except Exception:
-            return False
-        return True
+        # Reflects whether we hold an open handle — NOT live USB presence. There is
+        # no cheap, side-effect-free probe that detects a *physical* unplug while a
+        # handle is held: libdwf serves device-parameter reads from host memory, and
+        # re-enumeration keeps listing a device we have open even after it's pulled
+        # (both empirically verified against an AD3, 2026-06). A real unplug instead
+        # surfaces as a DwfLibraryError on the next genuine I/O call; recovery is to
+        # waveforms.close + waveforms.open. See docs/troubleshooting.md.
+        return self._info is not None
 
     # --- Scope (AnalogIn) ---------------------------------------------------
 
