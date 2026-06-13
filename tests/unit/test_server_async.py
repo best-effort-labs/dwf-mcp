@@ -426,3 +426,40 @@ async def test_genuine_error_with_device_present_is_not_swallowed(tmp_path, monk
     monkeypatch.setattr(fake, "supply_node_set", boom)
     with pytest.raises(RuntimeError, match="genuine backend bug"):
         await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+
+
+@pytest.mark.asyncio
+async def test_idle_close_clears_instruments_immediately(tmp_path, monkeypatch) -> None:
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path), idle_timeout_s=0.0)
+    await app.call_tool("waveforms.open", {})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+    assert "supply" in app.instruments
+    app.device.tick_idle()  # idle_timeout_s=0 -> closes -> on_close clears instruments
+    assert not app.device.is_open
+    assert app.instruments == {}
+
+
+@pytest.mark.asyncio
+async def test_open_different_serial_while_open_errors(tmp_path) -> None:
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    result = await app.call_tool("waveforms.open", {"device_serial": "OTHER-SERIAL"})
+    assert "error" in result
+    assert "already open" in result["error"]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_instrument_returns_error(tmp_path, monkeypatch) -> None:
+    import dataclasses
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    # DeviceProfile is frozen; replace the whole profile (device.profile is mutable).
+    app.device.profile = dataclasses.replace(
+        app.device.profile, supported_instruments=frozenset({"scope"})
+    )
+    result = await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+    assert result["error"]["type"] == "InstrumentNotConfigured"
+    assert "not available on this device" in result["error"]["message"]

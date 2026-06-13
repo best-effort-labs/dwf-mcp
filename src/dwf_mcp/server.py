@@ -11,14 +11,6 @@ from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.backend import DwfBackend, DwfDeviceLost
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
-from dwf_mcp.devices.ad3 import (
-    AD3_ANALOG_IN_PINS,
-    AD3_ANALOG_OUT_PINS,
-    AD3_DIO_PINS,
-    AD3_RESOURCE_GROUPS,
-    AD3_SUPPLY_PINS,
-    AD3_TRIGGER_PINS,
-)
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.instruments.awg import AWG
 from dwf_mcp.instruments.can import CAN
@@ -61,11 +53,10 @@ def _build_backend(name: str) -> DwfBackend:
     raise ValueError(f"unknown backend {name!r}")
 
 
-def _all_pins() -> list[str]:
-    return [
-        *AD3_DIO_PINS, *AD3_ANALOG_IN_PINS, *AD3_ANALOG_OUT_PINS,
-        *AD3_SUPPLY_PINS, *AD3_TRIGGER_PINS,
-    ]
+def _all_pins(device: DwfDevice) -> list[str]:
+    if device.inventory is None:
+        return []
+    return device.inventory.all_physical_pins()
 
 
 class DwfMcpApp:
@@ -84,6 +75,10 @@ class DwfMcpApp:
         self._tools: dict[str, Any] = {}
         self._tool_schemas: dict[str, dict[str, Any]] = {}
         self._register_meta_tools()
+        self.device.on_close = self._on_device_close
+
+    def _on_device_close(self) -> None:
+        self.instruments.clear()
 
     def _register_meta_tools(self) -> None:
         meta_schema = {"type": "object", "properties": {}}
@@ -133,6 +128,12 @@ class DwfMcpApp:
             # the device is open so we surface a clean DwfDeviceLost rather than a
             # backend exception escaping from __init__.
             self.device.require_open()
+            if (self.device.profile is not None
+                    and name not in self.device.profile.supported_instruments):
+                raise InstrumentNotConfigured(
+                    f"instrument {name!r} is not available on this device "
+                    f"({self.device.profile.name})"
+                )
             cls = self.registry.get_class(name)
             self.instruments[name] = cls(device=self.device, artifacts=self.artifacts)
         return self.instruments[name]
@@ -158,7 +159,11 @@ class DwfMcpApp:
             except DwfDeviceLost as exc:
                 self._reset_after_device_lost()
                 return self._error_payload(exc)
-        self.device.tick_idle()
+        # Automatic idle reaping between tool calls is armed only for a positive
+        # timeout; idle_timeout_s <= 0 disables auto-close (an explicit
+        # device.tick_idle() still evaluates the configured timeout directly).
+        if self.device.idle_timeout_s > 0:
+            self.device.tick_idle()
         # Give every live instrument a chance to reap idle/background state (e.g.
         # orphan sniff sessions) regardless of which tool was called.
         for instrument in list(self.instruments.values()):
@@ -198,6 +203,13 @@ class DwfMcpApp:
         }
 
     async def _tool_open(self, **kwargs: Any) -> dict[str, Any]:
+        requested_serial = kwargs.get("device_serial")
+        if self.device.is_open:
+            current_serial = self.device._info.serial if self.device._info else None
+            if requested_serial not in (None, current_serial):
+                return self._error_payload(DwfDeviceLost(
+                    "a device is already open; close it before opening a different serial"
+                ))
         policy_fields = {
             f: kwargs.pop(f) for f in [
                 "supply_max_voltage_pos", "supply_max_voltage_neg", "supply_max_current",
@@ -236,7 +248,7 @@ class DwfMcpApp:
     async def _tool_list_pins(self) -> dict[str, Any]:
         self.device.require_open()
         return {
-            "all_pins": _all_pins(),
+            "all_pins": _all_pins(self.device),
             "claimed": self.device.allocator.claimed_pins(),
             "resource_groups": [
                 {"name": g.name, "pins": sorted(g.pins), "exclusive": g.exclusive}
@@ -254,7 +266,7 @@ def build_app(
     backend_name = backend_name or os.environ.get("DWF_BACKEND", "pydwf")
     workspace = workspace or os.environ.get("DWF_WORKSPACE")
     backend = _build_backend(backend_name)
-    allocator = PinAllocator(resource_groups=AD3_RESOURCE_GROUPS)
+    allocator = PinAllocator()  # resource groups configured at device open
     device = DwfDevice(
         backend=backend,
         policy=SafetyPolicy(),
