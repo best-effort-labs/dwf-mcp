@@ -1066,3 +1066,36 @@ def test_sniff_streaming_peak_memory_bounded(tmp_path: Path) -> None:
         f"peak memory {peak / 1e6:.1f} MB exceeds 8 MB bound — "
         "streaming path may be accumulating raw chunks"
     )
+
+
+def test_tick_idle_reaps_completed_orphan_spi_session(sniff: Sniff) -> None:
+    """A SPI sniff session that auto-completed but was never *_stop'd must be
+    reaped (claim released, session evicted) by tick_idle — which the server
+    now calls on every tool, so cleanup happens even if the client switches to
+    non-sniff tools."""
+    import time as _time
+
+    from dwf_mcp.instruments._async_sniff import SNIFF_REAP_AFTER_S
+
+    fake: FakeBackend = sniff.device.backend  # type: ignore
+    fake.set_logic_record_status_sequence([(10, 0, 0)])  # completes after one poll
+
+    async def run() -> str:
+        start = await sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1,
+        )
+        await asyncio.sleep(0.05)  # let record_loop finish → record_session.done
+        return start["sniff_id"]
+
+    sniff_id = asyncio.run(run())
+    session = sniff._spi_sessions[sniff_id]
+    assert session.record_session.done
+    # Backdate completion past the retention window so one reap pass evicts it.
+    session.completed_at = _time.monotonic() - SNIFF_REAP_AFTER_S - 1.0
+
+    claimed_before = dict(sniff.device.allocator.claimed_pins())
+    sniff.tick_idle()
+
+    assert sniff_id not in sniff._spi_sessions, "orphan session not reaped"
+    # The observer claim it held must be released.
+    assert sniff.device.allocator.claimed_pins() != claimed_before or claimed_before == {}

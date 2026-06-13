@@ -144,6 +144,10 @@ class DwfMcpApp:
         except KeyError:
             raise ValueError(f"unknown tool {name!r}") from None
         self.device.tick_idle()
+        # Give every live instrument a chance to reap idle/background state (e.g.
+        # orphan sniff sessions) regardless of which tool was called.
+        for instrument in list(self.instruments.values()):
+            instrument.tick_idle()
         try:
             result = await handler(on_record_chunk=on_record_chunk, **args)
             return cast(dict[str, Any], result)

@@ -221,6 +221,14 @@ class Sniff(Instrument):
         # compatibility with existing tests that reach into ``_spi_sessions``.
         self._async_sessions: dict[str, _AsyncSniffSession] = {}
 
+    def tick_idle(self) -> None:
+        """Reap auto-completed sessions whose owner never called *_stop. Called by
+        the server on every tool dispatch, so orphan sessions are cleaned up even
+        when the client switches away to non-sniff tools (not just on sniff
+        start/status, which is the only other place the reaper runs)."""
+        reap_completed_sessions(self._spi_sessions, self.device)
+        reap_completed_sessions(self._async_sessions, self.device)
+
     # --- sniff.i2c ---
 
     async def i2c(

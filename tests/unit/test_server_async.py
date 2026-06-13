@@ -332,3 +332,36 @@ def test_build_app_registers_stage3b_streaming_tools(tmp_path) -> None:
     }
     missing = expected - tool_names
     assert missing == set(), f"missing tools: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_ticks_idle_on_live_instruments(tmp_path) -> None:
+    """Every tool call should give live instruments a chance to reap idle state
+    (e.g. orphan sniff sessions whose owner never called *_stop), regardless of
+    which tool was actually invoked."""
+    from typing import ClassVar
+
+    from dwf_mcp.server import build_app
+
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+
+    ticks = {"n": 0}
+
+    class _SpyInstrument(Instrument):
+        name = "spy"
+        tools: ClassVar[dict[str, Any]] = {}
+
+        def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
+            pass
+
+        def release(self) -> None:
+            pass
+
+        def tick_idle(self) -> None:
+            ticks["n"] += 1
+
+    app.instruments["spy"] = _SpyInstrument(app.device, app.artifacts)
+
+    await app.call_tool("waveforms.status", {})  # unrelated tool
+    assert ticks["n"] >= 1, "call_tool did not tick idle on live instruments"
