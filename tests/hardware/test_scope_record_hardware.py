@@ -15,7 +15,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytestmark = [pytest.mark.hardware, pytest.mark.device_config("max_analog_in")]
+# Self-stimulus (AWG OUT + scope IN): needs both analog directions, so use the
+# default balanced config rather than a max-input one (which shrinks AnalogOut).
+pytestmark = pytest.mark.hardware
 
 
 @pytest.fixture(scope="module")

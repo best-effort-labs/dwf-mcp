@@ -14,7 +14,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytestmark = [pytest.mark.hardware, pytest.mark.device_config("max_digital_in")]
+# Self-stimulus (pattern OUT + logic IN): needs both digital directions, so use
+# the default balanced config rather than a max-input one (which kills DigitalOut).
+pytestmark = pytest.mark.hardware
 
 
 @pytest.fixture(scope="module")
