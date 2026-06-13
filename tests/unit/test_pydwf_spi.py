@@ -130,6 +130,17 @@ def test_transfer_active_high_cs_levels(backend_spi) -> None:
     assert spi.calls[-1][1] == (5, 0)  # release → 0
 
 
+def test_reconfigure_without_cs_clears_stale_cs_state(backend_spi) -> None:
+    """Configuring with a CS pin then reconfiguring without one must not leave
+    stale CS state that brackets later transfers against a pin no longer in use."""
+    backend, spi = backend_spi
+    _configure(backend, cs_idx=3, cs_polarity="active_low")
+    _configure(backend, cs_idx=None)
+    spi.calls.clear()
+    backend.spi_transfer(bytes([0xAA]), assert_cs=True)
+    assert spi.names() == ["writeRead"]   # no select() against the old pin
+
+
 def test_cs_released_even_if_transfer_raises(backend_spi) -> None:
     """CS must be returned to idle even if the underlying transfer throws,
     otherwise the bus is left with a slave selected."""
