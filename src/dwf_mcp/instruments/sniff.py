@@ -25,7 +25,7 @@ from dwf_mcp.instruments.decoder.uart import UartDecoder
 
 log = logging.getLogger(__name__)
 
-_PIN_RE = r"^dio([0-9]|1[0-5])$"
+_PIN_RE = r"^dio\d+$"
 
 
 def _dio_index(pin: str) -> int:
@@ -240,6 +240,8 @@ class Sniff(Instrument):
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
     ) -> dict[str, Any]:
+        self.device.validate_pin(sda_pin)
+        self.device.validate_pin(scl_pin)
         self.device.allocator.claim("sniff_i2c", ["i2c_engine", sda_pin, scl_pin])
         transactions: list[dict[str, Any]] = []
         error_count = 0
@@ -330,6 +332,7 @@ class Sniff(Instrument):
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
     ) -> dict[str, Any]:
+        self.device.validate_pin(rx_pin)
         self.device.allocator.claim("sniff_uart", ["uart_engine", rx_pin])
         artifact_path: str | None = None
         artifact_error: str | None = None
@@ -396,6 +399,7 @@ class Sniff(Instrument):
         poll_interval_s: float = 0.010,
         output_path: str | None = None,
     ) -> dict[str, Any]:
+        self.device.validate_pin(rx_pin)
         self.device.allocator.claim("sniff_can", ["can_engine", rx_pin])
         artifact_path: str | None = None
         artifact_error: str | None = None
@@ -466,6 +470,8 @@ class Sniff(Instrument):
     ) -> dict[str, Any]:
         sample_rate_hz = freq_hz * 10  # 10× oversampling
         pins = [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None]
+        for p in pins:
+            self.device.validate_pin(p)
         if not stream_decode:
             check_memory_cap(sample_rate_hz, max_duration_s, n_pins=len(pins))
         pin_mask = sum(1 << int(p[3:]) for p in pins)
@@ -591,6 +597,8 @@ class Sniff(Instrument):
         output_path: str | None = None,
         stream_decode: bool = False,
     ) -> dict[str, Any]:
+        self.device.validate_pin(sda_pin)
+        self.device.validate_pin(scl_pin)
         rate = float(sample_rate_hz) if sample_rate_hz else float(clock_hz) * 10.0
         if rate / float(clock_hz) < 4.0:
             raise ValueError(
@@ -722,6 +730,7 @@ class Sniff(Instrument):
         output_path: str | None = None,
         stream_decode: bool = False,
     ) -> dict[str, Any]:
+        self.device.validate_pin(rx_pin)
         rate = float(sample_rate_hz) if sample_rate_hz else float(baud) * 10.0
         if rate / float(baud) < 4.0:
             raise ValueError(
@@ -851,6 +860,7 @@ class Sniff(Instrument):
         output_path: str | None = None,
         stream_decode: bool = False,
     ) -> dict[str, Any]:
+        self.device.validate_pin(rx_pin)
         # Default 20× oversampling — CAN spec requires >=8× per bit; 20× gives
         # safe headroom for the 75 % sample point and bit-stuff destuffing.
         rate = float(sample_rate_hz) if sample_rate_hz else float(bitrate) * 20.0

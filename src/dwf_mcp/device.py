@@ -224,6 +224,9 @@ class DwfDevice:
                 "serial": self._info.serial,
                 "model": self._info.model,
                 "firmware": self._info.firmware,
+                "devid": self._info.devid,
+                "dio_count": self._info.dio_count,
+                "sample_rate_max_hz": self._info.sample_rate_max_hz,
             }
         return {
             "open": self.is_open,

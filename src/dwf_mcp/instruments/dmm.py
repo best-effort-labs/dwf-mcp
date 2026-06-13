@@ -18,7 +18,7 @@ DMM_MEASURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["channel", "range_v"],
     "properties": {
-        "channel": {"type": "integer", "enum": [1, 2]},
+        "channel": {"type": "integer", "minimum": 1},
         "range_v": {"type": "number", "minimum": 0.001, "maximum": 50.0},
         "coupling": {"type": "string", "enum": ["DC", "AC"], "default": "DC"},
         "n_averages": {"type": "integer", "minimum": 1, "maximum": 16384, "default": 64},
@@ -47,6 +47,7 @@ class DMM(Instrument):
             raise ValueError(
                 f"coupling must be one of {sorted(_VALID_COUPLINGS)}, got {coupling!r}"
             )
+        self.device.validate_channel(channel, "scope")
         self.device.allocator.claim("dmm", ["scope1", "scope2"])
         try:
             self.device.backend.dmm_configure(channel, range_v, coupling, n_averages)

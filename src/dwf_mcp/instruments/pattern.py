@@ -17,7 +17,7 @@ PATTERN_CONFIGURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pin", "function", "frequency_hz", "duty", "idle_state"],
     "properties": {
-        "pin": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"},
+        "pin": {"type": "string", "pattern": "^dio\\d+$"},
         "function": {"type": "string", "enum": sorted(_VALID_FUNCTIONS)},
         "frequency_hz": {"type": "number", "minimum": 0.0},
         "duty": {"type": "number", "minimum": 0.0, "maximum": 1.0},
@@ -28,7 +28,7 @@ PATTERN_CONFIGURE_SCHEMA: dict[str, Any] = {
 PATTERN_PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pin"],
-    "properties": {"pin": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"}},
+    "properties": {"pin": {"type": "string", "pattern": "^dio\\d+$"}},
 }
 
 
@@ -84,6 +84,7 @@ class Pattern(Instrument):
         return {"configured": True, "pin": pin}
 
     def start(self, pin: str) -> dict[str, Any]:
+        self.device.validate_pin(pin)
         if pin not in self._configured_pins:
             raise InstrumentNotConfigured(
                 f"pattern.configure must be called for {pin!r} before start"

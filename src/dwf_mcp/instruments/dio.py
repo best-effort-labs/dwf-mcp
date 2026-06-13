@@ -13,7 +13,7 @@ DIO_DIRECTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pin", "direction"],
     "properties": {
-        "pin": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"},
+        "pin": {"type": "string", "pattern": "^dio\\d+$"},
         "direction": {"type": "string", "enum": ["in", "out"]},
     },
 }
@@ -22,7 +22,7 @@ DIO_SET_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pin", "state"],
     "properties": {
-        "pin": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"},
+        "pin": {"type": "string", "pattern": "^dio\\d+$"},
         "state": {"type": "integer", "enum": [0, 1]},
     },
 }
@@ -30,7 +30,7 @@ DIO_SET_SCHEMA: dict[str, Any] = {
 DIO_PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pin"],
-    "properties": {"pin": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"}},
+    "properties": {"pin": {"type": "string", "pattern": "^dio\\d+$"}},
 }
 
 
@@ -58,6 +58,7 @@ class DIO(Instrument):
         return {"pin": pin, "direction": direction}
 
     def set(self, pin: str, state: int) -> dict[str, Any]:
+        self.device.validate_pin(pin)
         direction = self._directions.get(pin, "in")
         if direction != "out":
             raise ValueError(
@@ -77,6 +78,7 @@ class DIO(Instrument):
         return {"pin": pin, "state": state}
 
     def read(self, pin: str) -> dict[str, Any]:
+        self.device.validate_pin(pin)
         self.device.allocator.claim("dio", [pin])
         try:
             direction = self._directions.get(pin, "in")

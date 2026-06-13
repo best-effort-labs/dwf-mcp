@@ -70,6 +70,8 @@ class UART(Instrument):
         if tx_pin is None and rx_pin is None:
             raise ValueError("at least one of tx_pin or rx_pin must be provided")
         pins = [p for p in [tx_pin, rx_pin] if p is not None]
+        for p in pins:
+            self.device.validate_pin(p)
         tx_idx = _dio_index(tx_pin) if tx_pin else None
         rx_idx = _dio_index(rx_pin) if rx_pin else None
 

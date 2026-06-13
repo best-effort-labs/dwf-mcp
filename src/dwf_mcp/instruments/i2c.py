@@ -88,6 +88,8 @@ class I2C(Instrument):
     ) -> dict[str, Any]:
         if sda_pin == scl_pin:
             raise ValueError("sda_pin and scl_pin must be different")
+        self.device.validate_pin(sda_pin)
+        self.device.validate_pin(scl_pin)
         sda_idx = _dio_index(sda_pin)
         scl_idx = _dio_index(scl_pin)
         # Partial-failure pattern: claim pins, clear stale state, try backend calls,

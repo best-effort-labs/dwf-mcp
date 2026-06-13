@@ -246,7 +246,8 @@ class DwfMcpApp:
         return self.device.status()
 
     async def _tool_list_pins(self) -> dict[str, Any]:
-        self.device.require_open()
+        info = self.device.require_open()
+        assert self.device.profile is not None  # guaranteed once the device is open
         return {
             "all_pins": _all_pins(self.device),
             "claimed": self.device.allocator.claimed_pins(),
@@ -254,6 +255,12 @@ class DwfMcpApp:
                 {"name": g.name, "pins": sorted(g.pins), "exclusive": g.exclusive}
                 for g in self.device.allocator.resource_groups
             ],
+            "limits": {
+                "dio_count": info.dio_count,
+                "analog_in_channels": info.analog_in_channels,
+                "user_awg_channels": self.device.profile.user_awg_count,
+                "sample_rate_max_hz": info.sample_rate_max_hz,
+            },
         }
 
 

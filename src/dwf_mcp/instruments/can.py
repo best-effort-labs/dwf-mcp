@@ -58,6 +58,8 @@ class CAN(Instrument):
         rx_pin: str,
         bit_rate: int,
     ) -> dict[str, Any]:
+        self.device.validate_pin(tx_pin)
+        self.device.validate_pin(rx_pin)
         tx_idx = _dio_index(tx_pin)
         rx_idx = _dio_index(rx_pin)
         self.device.allocator.claim("can", ["can_engine", tx_pin, rx_pin])

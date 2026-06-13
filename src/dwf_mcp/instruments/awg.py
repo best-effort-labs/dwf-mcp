@@ -21,7 +21,7 @@ AWG_CONFIGURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["channel", "function", "frequency_hz", "amplitude_v"],
     "properties": {
-        "channel": {"type": "integer", "enum": [1, 2]},
+        "channel": {"type": "integer", "minimum": 1},
         "function": {
             "type": "string",
             "enum": sorted(_VALID_FUNCTIONS),
@@ -39,7 +39,7 @@ AWG_UPLOAD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["channel", "samples_npy_path"],
     "properties": {
-        "channel": {"type": "integer", "enum": [1, 2]},
+        "channel": {"type": "integer", "minimum": 1},
         "samples_npy_path": {"type": "string"},
         "amplitude_v": {"type": "number", "minimum": 0.0, "default": 1.0},
     },
@@ -48,7 +48,7 @@ AWG_UPLOAD_SCHEMA: dict[str, Any] = {
 AWG_CHANNEL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["channel"],
-    "properties": {"channel": {"type": "integer", "enum": [1, 2]}},
+    "properties": {"channel": {"type": "integer", "minimum": 1}},
 }
 
 
@@ -81,6 +81,7 @@ class AWG(Instrument):
     ) -> dict[str, Any]:
         if function not in _VALID_FUNCTIONS:
             raise ValueError(f"function must be one of {sorted(_VALID_FUNCTIONS)}, got {function!r}")
+        self.device.validate_channel(channel, "awg")
         pin = _CHANNEL_TO_PIN[channel]
         # Reconfiguring a running channel applies the new amplitude to live
         # hardware, so gate it like start() before any hardware write. Idle
@@ -125,6 +126,7 @@ class AWG(Instrument):
         amplitude_v: float = 1.0,
         _samples: np.ndarray | None = None,  # for unit testing without a file
     ) -> dict[str, Any]:
+        self.device.validate_channel(channel, "awg")
         if _samples is not None:
             samples = _samples
         else:
@@ -161,6 +163,7 @@ class AWG(Instrument):
         return {"uploaded": True, "channel": channel, "n_samples": len(samples), "pin": pin}
 
     def start(self, channel: int) -> dict[str, Any]:
+        self.device.validate_channel(channel, "awg")
         if channel not in self._configured_channels:
             raise InstrumentNotConfigured(
                 f"awg.configure or awg.upload_custom must be called for channel {channel} before start"
@@ -171,6 +174,7 @@ class AWG(Instrument):
         return {"started": True, "channel": channel}
 
     def stop(self, channel: int) -> dict[str, Any]:
+        self.device.validate_channel(channel, "awg")
         self.device.backend.awg_stop(channel=channel)
         self._running_channels.discard(channel)
         return {"stopped": True, "channel": channel}

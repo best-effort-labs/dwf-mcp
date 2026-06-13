@@ -46,11 +46,11 @@ LOGIC_CONFIGURE_SCHEMA: dict[str, Any] = {
     "properties": {
         "pins": {
             "type": "array",
-            "items": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"},
+            "items": {"type": "string", "pattern": "^dio\\d+$"},
             "minItems": 1,
             "uniqueItems": True,
         },
-        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 125_000_000.0},
+        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 1_000_000_000.0},
         "buffer_size": {"type": "integer", "minimum": 16, "maximum": 1_048_576},
     },
 }
@@ -60,7 +60,7 @@ LOGIC_TRIGGER_SCHEMA: dict[str, Any] = {
     "required": ["source"],
     "properties": {
         "source": {"type": "string", "enum": sorted(_VALID_SOURCES)},
-        "pin": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"},
+        "pin": {"type": "string", "pattern": "^dio\\d+$"},
         "level": {"type": "number"},
         "condition": {"type": "string", "enum": ["Rising", "Falling", "Either"]},
         "position_s": {"type": "number", "default": 0.0},
@@ -82,11 +82,11 @@ LOGIC_RECORD_START_SCHEMA: dict[str, Any] = {
     "properties": {
         "pins": {
             "type": "array",
-            "items": {"type": "string", "pattern": "^dio([0-9]|1[0-5])$"},
+            "items": {"type": "string", "pattern": "^dio\\d+$"},
             "minItems": 1,
             "uniqueItems": True,
         },
-        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 125_000_000.0},
+        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 1_000_000_000.0},
         "duration_s": {"type": "number", "minimum": 0.001},
         "output_path": {"type": "string"},
         "format": {"type": "string", "enum": ["npz", "vcd"], "default": "npz"},
@@ -125,6 +125,9 @@ class Logic(Instrument):
         sample_rate_hz: float,
         buffer_size: int,
     ) -> dict[str, Any]:
+        for pin in pins:
+            self.device.validate_pin(pin)
+        self.device.validate_rate(sample_rate_hz)
         self.device.allocator.claim("logic", ["digital_in"] + pins)
         self._config = None
         try:
@@ -254,6 +257,9 @@ class Logic(Instrument):
             raise ValueError(
                 "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
             )
+        for pin in pins:
+            self.device.validate_pin(pin)
+        self.device.validate_rate(sample_rate_hz)
         # The DigitalIn engine is singular: a second record while a prior session is
         # still open would re-arm the same hardware under the first session's running
         # poll task. Require the previous session be stopped first (mirrors Scope).
