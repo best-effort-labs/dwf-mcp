@@ -247,6 +247,14 @@ class Logic(Instrument):
             raise ValueError(
                 "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
             )
+        # The DigitalIn engine is singular: a second record while a prior session is
+        # still open would re-arm the same hardware under the first session's running
+        # poll task. Require the previous session be stopped first (mirrors Scope).
+        if self._sessions:
+            raise RuntimeError(
+                "logic is already in record mode — call logic.record_stop() "
+                f"for {sorted(self._sessions)} first"
+            )
         self.device.allocator.claim("logic", ["digital_in"] + pins)
         vcd_w: vcd_writer.VcdStreamWriter | None = None
         vcd_path: str | None = None

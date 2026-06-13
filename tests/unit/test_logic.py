@@ -127,6 +127,29 @@ async def test_record_start_returns_record_id(logic: Logic) -> None:
 
 
 @pytest.mark.asyncio
+async def test_second_record_start_while_session_open_raises(logic: Logic) -> None:
+    """The DigitalIn engine is singular. A second record_start() while a prior
+    session is still open must be rejected — otherwise it reconfigures/re-arms the
+    same engine under the first session's running poll task. Mirrors Scope's
+    'already in record mode' guard.
+    """
+    fake: FakeBackend = logic.device.backend  # type: ignore[assignment]
+    fake.set_logic_record_status_sequence([(10, 0, 0)])
+    first = await logic.record_start(
+        pins=["dio0"], sample_rate_hz=1_000_000, duration_s=0.01
+    )
+    rid = first["record_id"]
+
+    with pytest.raises(RuntimeError, match="record"):
+        await logic.record_start(
+            pins=["dio1"], sample_rate_hz=1_000_000, duration_s=0.01
+        )
+
+    # The original session must be untouched and still stoppable.
+    await logic.record_stop(record_id=rid)
+
+
+@pytest.mark.asyncio
 async def test_record_status_reports_done(logic: Logic) -> None:
     fake: FakeBackend = logic.device.backend  # type: ignore[assignment]
     fake.set_logic_record_status_sequence([(5, 0, 0)])
