@@ -25,6 +25,10 @@ class DeviceInfo:
     dio_count: int
     analog_in_channels: int
     analog_out_channels: int
+    devid: int = 0
+    analog_in_buffer_max: int = 0
+    digital_in_buffer_max: int = 0
+    digital_word_width: int = 16
 
 
 class DwfBackend(ABC):

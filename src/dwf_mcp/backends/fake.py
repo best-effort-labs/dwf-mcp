@@ -10,11 +10,30 @@ _FAKE_DEVICE = DeviceInfo(
     serial="FAKE-AD3-0001",
     model="Analog Discovery 3",
     firmware="fake-1.0",
-    sample_rate_max_hz=125_000_000,
+    sample_rate_max_hz=100_000_000.0,
     dio_count=16,
     analog_in_channels=2,
-    analog_out_channels=2,
+    analog_out_channels=4,
+    devid=10,
+    analog_in_buffer_max=16384,
+    digital_in_buffer_max=16384,
+    digital_word_width=16,
 )
+
+
+def make_fake_device(
+    devid: int = 10, *, serial: str = "FAKE-0001", model: str = "Fake Discovery",
+    dio_count: int = 16, analog_in_channels: int = 2, analog_out_channels: int = 4,
+    sample_rate_max_hz: float = 100_000_000.0, analog_in_buffer_max: int = 16384,
+    digital_in_buffer_max: int = 16384, digital_word_width: int = 16,
+) -> DeviceInfo:
+    return DeviceInfo(
+        serial=serial, model=model, firmware="fake-1.0", devid=devid,
+        sample_rate_max_hz=sample_rate_max_hz, dio_count=dio_count,
+        analog_in_channels=analog_in_channels, analog_out_channels=analog_out_channels,
+        analog_in_buffer_max=analog_in_buffer_max,
+        digital_in_buffer_max=digital_in_buffer_max, digital_word_width=digital_word_width,
+    )
 
 
 class FakeBackend(DwfBackend):
