@@ -66,6 +66,7 @@ class AWG(Instrument):
         self.artifacts = artifacts
         self._amplitude: dict[int, float] = {}
         self._configured_channels: _Set[int] = set()
+        self._running_channels: _Set[int] = set()
 
     def configure(
         self,
@@ -81,6 +82,11 @@ class AWG(Instrument):
         if function not in _VALID_FUNCTIONS:
             raise ValueError(f"function must be one of {sorted(_VALID_FUNCTIONS)}, got {function!r}")
         pin = _CHANNEL_TO_PIN[channel]
+        # Reconfiguring a running channel applies the new amplitude to live
+        # hardware, so gate it like start() before any hardware write. Idle
+        # channels stay ungated (the gate fires at start).
+        if channel in self._running_channels:
+            self.device.gate_output("awg_start", channel=channel, amplitude=amplitude_v)
         prior_channels = _Set(self._configured_channels)
         prior_amplitude = self._amplitude.get(channel)
         new_pins = sorted(_CHANNEL_TO_PIN[c] for c in (prior_channels | {channel}))
@@ -133,6 +139,10 @@ class AWG(Instrument):
                 f"custom waveform samples must be in [-1.0, 1.0], "
                 f"got range [{float(samples.min()):.3f}, {float(samples.max()):.3f}]"
             )
+        # Re-uploading to a running channel applies the new amplitude to live
+        # hardware — gate it like start() before any hardware write.
+        if channel in self._running_channels:
+            self.device.gate_output("awg_start", channel=channel, amplitude=amplitude_v)
         pin = _CHANNEL_TO_PIN[channel]
         prior_channels = _Set(self._configured_channels)
         new_pins = sorted(_CHANNEL_TO_PIN[c] for c in (prior_channels | {channel}))
@@ -157,10 +167,12 @@ class AWG(Instrument):
             )
         self.device.gate_output("awg_start", channel=channel, amplitude=self._amplitude.get(channel, 0.0))
         self.device.backend.awg_start(channel=channel)
+        self._running_channels.add(channel)
         return {"started": True, "channel": channel}
 
     def stop(self, channel: int) -> dict[str, Any]:
         self.device.backend.awg_stop(channel=channel)
+        self._running_channels.discard(channel)
         return {"stopped": True, "channel": channel}
 
     def release(self) -> None:
@@ -170,3 +182,4 @@ class AWG(Instrument):
         self.device.allocator.release("awg")
         self._configured_channels.clear()
         self._amplitude.clear()
+        self._running_channels.clear()

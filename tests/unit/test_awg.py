@@ -131,3 +131,47 @@ def test_release_stops_all_channels(awg: AWG) -> None:
     stops = [c for c in fake.awg_calls if c[0] == "stop"]
     assert len(stops) == 2
     assert awg.device.allocator.claimed_pins() == {}
+
+
+def test_reconfigure_running_channel_above_cap_is_gated(awg: AWG) -> None:
+    """Reconfiguring an already-running generator applies amplitude to live
+    hardware, so it must route through the safety gate — same hole as supply.set.
+    """
+    awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=1.0)
+    awg.start(channel=1)
+    fake: FakeBackend = awg.device.backend  # type: ignore[assignment]
+    boundary = len(fake.awg_calls)
+    with pytest.raises(SafetyViolation):
+        awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=5.0)
+    # No hardware reconfigure with the over-cap amplitude.
+    new_configures = [c for c in fake.awg_calls[boundary:] if c[0] == "configure"]
+    assert new_configures == []
+    # Stored amplitude unchanged (still the last safe value).
+    assert awg._amplitude[1] == 1.0  # noqa: SLF001
+
+
+def test_upload_custom_on_running_channel_above_cap_is_gated(awg: AWG) -> None:
+    awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=1.0)
+    awg.start(channel=1)
+    samples = np.linspace(-1.0, 1.0, 16)
+    with pytest.raises(SafetyViolation):
+        awg.upload_custom(channel=1, samples_npy_path=None, amplitude_v=5.0, _samples=samples)
+
+
+def test_reconfigure_idle_channel_above_cap_still_allowed(awg: AWG) -> None:
+    """A configured-but-not-started channel is not live, so configure() should
+    keep staging without a gate (the gate fires at start). Guards against
+    over-gating the running-channel fix."""
+    awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=1.0)
+    # Not started → reconfigure above cap is allowed (start() will reject it).
+    awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=5.0)
+    assert awg._amplitude[1] == 5.0  # noqa: SLF001
+
+
+def test_stop_clears_running_so_reconfigure_allowed(awg: AWG) -> None:
+    """After stop(), the channel is no longer live, so reconfigure must not gate."""
+    awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=1.0)
+    awg.start(channel=1)
+    awg.stop(channel=1)
+    awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=5.0)
+    assert awg._amplitude[1] == 5.0  # noqa: SLF001
