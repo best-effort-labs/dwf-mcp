@@ -22,6 +22,7 @@ import numpy as np
 from pydwf import (  # type: ignore[import-untyped]
     DwfAcquisitionMode,
     DwfAnalogCoupling,
+    DwfDeviceParameter,
     DwfEnumFilter,
     DwfLibrary,
     DwfState,
@@ -117,7 +118,16 @@ class PydwfBackend(DwfBackend):
 
     @property
     def is_open(self) -> bool:
-        return self._info is not None
+        if self._info is None or self._device is None:
+            return False
+        # Probe the live USB link so an unplugged device is detected — the cached
+        # _info alone can't tell. paramGet does a real device transaction (~0.02 ms
+        # on an AD3) and raises if the device is gone.
+        try:
+            self._device.paramGet(DwfDeviceParameter.OnClose)
+        except Exception:
+            return False
+        return True
 
     # --- Scope (AnalogIn) ---------------------------------------------------
 

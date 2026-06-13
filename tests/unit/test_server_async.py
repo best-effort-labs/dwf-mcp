@@ -199,6 +199,7 @@ async def test_call_tool_propagates_unmapped_exception(tmp_path) -> None:
     code) propagate to the caller rather than being silently swallowed."""
     from dwf_mcp.server import build_app
     app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})  # instrument tools require an open device
     app.registry.register(_RaisingInstrument)
     app._tools["raising_test.boom"] = app._make_instrument_handler("raising_test", "boom")
     app.instruments["raising_test"] = _RaisingInstrument(device=app.device, artifacts=app.artifacts)
@@ -227,6 +228,7 @@ async def test_waveforms_list_pins_returns_pin_inventory(tmp_path) -> None:
 async def test_handler_awaits_coroutine(tmp_path):
     from dwf_mcp.server import build_app
     app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})  # instrument tools require an open device
     app.registry.register(_AsyncInstrument)
     app._tools["async_test.do_async"] = app._make_instrument_handler("async_test", "do_async")
     app.instruments["async_test"] = _AsyncInstrument(device=app.device, artifacts=app.artifacts)
@@ -339,8 +341,6 @@ async def test_call_tool_ticks_idle_on_live_instruments(tmp_path) -> None:
     """Every tool call should give live instruments a chance to reap idle state
     (e.g. orphan sniff sessions whose owner never called *_stop), regardless of
     which tool was actually invoked."""
-    from typing import ClassVar
-
     from dwf_mcp.server import build_app
 
     app = build_app(backend_name="fake", workspace=str(tmp_path))
@@ -365,3 +365,64 @@ async def test_call_tool_ticks_idle_on_live_instruments(tmp_path) -> None:
 
     await app.call_tool("waveforms.status", {})  # unrelated tool
     assert ticks["n"] >= 1, "call_tool did not tick idle on live instruments"
+
+
+@pytest.mark.asyncio
+async def test_instrument_tool_after_unplug_returns_clean_error_and_resets(tmp_path) -> None:
+    """A device unplugged between tool calls must be detected before dispatch:
+    the instrument tool returns a clean DwfDeviceLost, and stale instrument +
+    allocator state is cleared so a re-open starts fresh."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+    assert "supply" in app.instruments
+    assert app.device.allocator.claimed_pins() != {}
+
+    app.device.backend.simulate_unplug()  # type: ignore[attr-defined]
+
+    result = await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+    assert result["error"]["type"] == "DwfDeviceLost"
+    assert app.instruments == {}
+    assert app.device.allocator.claimed_pins() == {}
+
+
+@pytest.mark.asyncio
+async def test_device_lost_mid_call_surfaces_clean_error(tmp_path, monkeypatch) -> None:
+    """If the device vanishes during a handler (raw backend error + device now
+    gone), call_tool surfaces a clean DwfDeviceLost and resets — rather than
+    leaking the raw exception."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+
+    fake = app.device.backend
+
+    def boom(*a, **k):
+        fake._open_info = None  # device disappears mid-call  # noqa: SLF001
+        raise RuntimeError("usb communication failed")
+
+    monkeypatch.setattr(fake, "supply_node_set", boom)
+    result = await app.call_tool("supply.set", {"channel": "vpos", "voltage": 5.0})
+    assert result["error"]["type"] == "DwfDeviceLost"
+    assert app.instruments == {}
+
+
+@pytest.mark.asyncio
+async def test_genuine_error_with_device_present_is_not_swallowed(tmp_path, monkeypatch) -> None:
+    """A handler error while the device is still present is a real bug, not a
+    disconnect — it must propagate, not be masked as DwfDeviceLost."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+
+    fake = app.device.backend
+
+    def boom(*a, **k):
+        raise RuntimeError("genuine backend bug")  # device stays present
+
+    monkeypatch.setattr(fake, "supply_node_set", boom)
+    with pytest.raises(RuntimeError, match="genuine backend bug"):
+        await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})

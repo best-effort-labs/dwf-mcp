@@ -46,6 +46,10 @@ _ERROR_TYPES: dict[type[Exception], str] = {
     InstrumentNotConfigured: "InstrumentNotConfigured",
 }
 
+# Tools that manage or report device lifecycle — they must run regardless of
+# whether a device is currently open, so they skip the pre-dispatch require_open.
+_LIFECYCLE_TOOLS = frozenset({"waveforms.open", "waveforms.close", "waveforms.status"})
+
 
 def _build_backend(name: str) -> DwfBackend:
     if name == "fake":
@@ -143,6 +147,17 @@ class DwfMcpApp:
             handler = self._tools[name]
         except KeyError:
             raise ValueError(f"unknown tool {name!r}") from None
+        # Detect a closed/unplugged/idle-expired device before dispatching an
+        # instrument tool, so it returns a clean DwfDeviceLost instead of a raw
+        # backend error. is_open probes the live link; on loss DwfDevice clears
+        # its info + allocator, and we drop instrument state here. Lifecycle tools
+        # (open/close/status) must run regardless of device state.
+        if name not in _LIFECYCLE_TOOLS:
+            try:
+                self.device.require_open()
+            except DwfDeviceLost as exc:
+                self._reset_after_device_lost()
+                return self._error_payload(exc)
         self.device.tick_idle()
         # Give every live instrument a chance to reap idle/background state (e.g.
         # orphan sniff sessions) regardless of which tool was called.
@@ -152,13 +167,35 @@ class DwfMcpApp:
             result = await handler(on_record_chunk=on_record_chunk, **args)
             return cast(dict[str, Any], result)
         except tuple(_ERROR_TYPES.keys()) as exc:
-            return {
-                "error": {
-                    "type": _ERROR_TYPES[type(exc)],
-                    "message": str(exc),
-                    "details": getattr(exc, "details", {}),
-                }
+            if isinstance(exc, DwfDeviceLost):
+                self._reset_after_device_lost()
+            return self._error_payload(exc)
+        except Exception:
+            # A handler raised something unexpected. If the device vanished
+            # mid-call, surface it as a clean DwfDeviceLost and reset; otherwise
+            # it's a genuine error — re-raise it unchanged (no false teardown).
+            if not self.device.is_open:
+                self._reset_after_device_lost()
+                return self._error_payload(
+                    DwfDeviceLost("device lost during operation (unplug or communication failure)")
+                )
+            raise
+
+    def _reset_after_device_lost(self) -> None:
+        """Drop server-side instrument state after the device disappears. The
+        cached device info and allocator claims are already cleared by
+        DwfDevice.is_open; this clears the instrument cache so a re-open is clean."""
+        self.instruments.clear()
+
+    @staticmethod
+    def _error_payload(exc: Exception) -> dict[str, Any]:
+        return {
+            "error": {
+                "type": _ERROR_TYPES.get(type(exc), type(exc).__name__),
+                "message": str(exc),
+                "details": getattr(exc, "details", {}),
             }
+        }
 
     async def _tool_open(self, **kwargs: Any) -> dict[str, Any]:
         policy_fields = {
