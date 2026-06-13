@@ -53,6 +53,21 @@ class Supply(Instrument):
         if channel not in self._layout:
             raise ValueError(f"unknown supply channel {channel!r}; have {sorted(self._layout)}")
         ch_idx, nodes = self._layout[channel]
+        # If the channel is already energized, changing its setpoint writes live
+        # hardware — route through the safety gate exactly like enable() so an
+        # enabled rail can't be pushed above policy without a check. A disabled
+        # channel is not live, so it keeps staging unchecked (gate fires at enable).
+        if channel in self._enabled:
+            resolved_current = (
+                current_limit if current_limit is not None
+                else self._setpoints.get(channel, {}).get("current_limit", 0.0)
+            )
+            self.device.gate_output(
+                "supply_enable",
+                channel=_CHANNEL_TO_POLICY_KIND[channel],
+                voltage=voltage,
+                current_limit=resolved_current,
+            )
         # Apply Scope's partial-failure pattern: capture prior claim + setpoint state,
         # claim new pins, clear stale setpoint, try backend calls, on failure restore.
         prior_claims = sorted(self._claimed_channels())

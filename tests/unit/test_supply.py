@@ -57,6 +57,37 @@ def test_enable_above_cap_raises_safety_violation(supply: Supply) -> None:
         supply.enable(channel="vpos")
 
 
+def test_set_on_enabled_channel_above_cap_is_gated(supply: Supply) -> None:
+    """Changing the setpoint of an already-energized rail writes live hardware,
+    so it must route through the safety gate just like enable() does.
+
+    Regression: previously set() never checked policy, letting a caller raise a
+    live rail above the cap (e.g. enable at 3.0 V, then set to 5.0 V) with no gate.
+    """
+    supply.set(channel="vpos", voltage=3.0, current_limit=0.4)
+    supply.enable(channel="vpos")
+    fake = supply.device.backend  # type: ignore[assignment]
+    boundary = len(fake.supply_calls)  # type: ignore[attr-defined]
+
+    with pytest.raises(SafetyViolation):
+        supply.set(channel="vpos", voltage=5.0)
+
+    # The over-cap voltage must never have been written to hardware.
+    new_node_sets = [
+        c for c in fake.supply_calls[boundary:] if c[0] == "node_set"  # type: ignore[attr-defined]
+    ]
+    assert all(c[1]["value"] != 5.0 for c in new_node_sets)
+    # The stored setpoint must remain the last safe value.
+    assert supply._setpoints["vpos"]["voltage"] == 3.0  # noqa: SLF001
+
+
+def test_set_on_disabled_channel_above_cap_still_stages(supply: Supply) -> None:
+    """A disabled channel is not live, so set() should keep staging without a gate
+    (the gate fires at enable). Guards against over-gating the fix above."""
+    supply.set(channel="vpos", voltage=5.0)  # no raise — channel not energized
+    assert supply._setpoints["vpos"]["voltage"] == 5.0  # noqa: SLF001
+
+
 def test_enable_within_cap_calls_master_enable(supply: Supply) -> None:
     supply.set(channel="vpos", voltage=3.0, current_limit=0.4)
     supply.enable(channel="vpos")
