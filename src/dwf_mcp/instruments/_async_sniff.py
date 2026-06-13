@@ -29,6 +29,10 @@ log = logging.getLogger(__name__)
 
 SNIFF_REAP_AFTER_S = 300.0  # 5 minutes
 MAX_RAW_BYTES = 32 * 1024 * 1024  # 32 MB
+# Record mode always stores the full 16-bit digital bank — one uint8 per channel
+# per sample (see PydwfBackend.logic_record_read) — regardless of how many pins a
+# protocol actually decodes. Memory scales with this width, not with n_pins.
+BYTES_PER_SAMPLE = 16
 
 
 @dataclass
@@ -74,14 +78,13 @@ class _AsyncSniffSession:
 def check_memory_cap(sample_rate_hz: float, max_duration_s: float, n_pins: int) -> None:
     """Raise ``ValueError`` if the projected raw capture exceeds the 32 MB cap.
 
-    The estimate is intentionally pessimistic: it assumes one raw sample byte
-    per active pin (record-mode stores one ``uint8`` per channel per sample),
-    so it provides a safe upper bound for callers that haven't yet committed
-    to a specific encoding.
+    Record mode stores the full 16-bit digital bank (``BYTES_PER_SAMPLE`` bytes
+    per sample) regardless of ``n_pins``, so the bound is width-independent.
+    ``n_pins`` is accepted for call-site clarity but does not scale the estimate.
     """
-    bytes_needed = sample_rate_hz * max_duration_s * max(1, n_pins)
+    bytes_needed = sample_rate_hz * max_duration_s * BYTES_PER_SAMPLE
     if bytes_needed > MAX_RAW_BYTES:
-        suggested = MAX_RAW_BYTES / (sample_rate_hz * max(1, n_pins))
+        suggested = MAX_RAW_BYTES / (sample_rate_hz * BYTES_PER_SAMPLE)
         raise ValueError(
             f"capture would need {bytes_needed/1e6:.1f} MB raw, exceeds 32 MB cap; "
             f"reduce sample_rate_hz or max_duration_s (try max_duration_s<={suggested:.2f})"

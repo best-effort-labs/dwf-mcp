@@ -7,6 +7,7 @@ import time
 import pytest
 
 from dwf_mcp.instruments._async_sniff import (
+    BYTES_PER_SAMPLE,
     MAX_RAW_BYTES,
     SNIFF_REAP_AFTER_S,
     _AsyncSniffSession,
@@ -17,12 +18,12 @@ from dwf_mcp.instruments._async_sniff import (
 # --- check_memory_cap ---
 
 def test_check_memory_cap_passes_under_limit() -> None:
-    """2 MB raw: 1 MHz x 1 s x 2 pins. Well under the 32 MB cap."""
+    """16 MB raw: 1 MHz x 1 s x 16 bytes/sample. Under the 32 MB cap."""
     check_memory_cap(sample_rate_hz=1_000_000.0, max_duration_s=1.0, n_pins=2)
 
 
 def test_check_memory_cap_raises_over_limit() -> None:
-    """200 MB raw: 100 MHz x 1 s x 2 pins. Far over 32 MB cap."""
+    """1.6 GB raw: 100 MHz x 1 s x 16 bytes/sample. Far over 32 MB cap."""
     with pytest.raises(ValueError, match="32 MB"):
         check_memory_cap(sample_rate_hz=100_000_000.0, max_duration_s=1.0, n_pins=2)
 
@@ -31,14 +32,13 @@ def test_check_memory_cap_exact_boundary() -> None:
     """A value exactly at the cap should pass.
 
     The helper raises only when ``bytes_needed > MAX_RAW_BYTES`` (strict),
-    so hitting the cap on the nose must succeed.
+    so hitting the cap on the nose must succeed. Storage is BYTES_PER_SAMPLE
+    bytes/sample, so the boundary is rate * duration * BYTES_PER_SAMPLE == cap.
     """
-    # MAX_RAW_BYTES = 32 * 1024 * 1024 (binary MB). Pick a rate/duration combo
-    # that lands precisely on the cap rather than 32_000_000.
-    rate = float(MAX_RAW_BYTES)  # 1 second * 1 pin * MAX_RAW_BYTES Hz == cap
+    rate = MAX_RAW_BYTES / BYTES_PER_SAMPLE  # 1 s * 16 bytes/sample * rate == cap
     check_memory_cap(sample_rate_hz=rate, max_duration_s=1.0, n_pins=1)
     # Sanity: confirm we sit exactly at the cap.
-    assert rate * 1.0 * 1 == MAX_RAW_BYTES
+    assert rate * 1.0 * BYTES_PER_SAMPLE == MAX_RAW_BYTES
 
 
 def test_check_memory_cap_suggests_smaller_duration() -> None:

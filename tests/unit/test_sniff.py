@@ -1099,3 +1099,20 @@ def test_tick_idle_reaps_completed_orphan_spi_session(sniff: Sniff) -> None:
     assert sniff_id not in sniff._spi_sessions, "orphan session not reaped"
     # The observer claim it held must be released.
     assert sniff.device.allocator.claimed_pins() != claimed_before or claimed_before == {}
+
+
+def test_check_memory_cap_bounds_on_full_16bit_bank() -> None:
+    """Record storage is always the full 16-bit digital bank (16 bytes/sample),
+    so the cap must bound on that — not on n_pins. A 4M-sample capture is well
+    under the old n_pins=1 estimate (4 MB) but is 64 MB of real storage."""
+    from dwf_mcp.instruments._async_sniff import check_memory_cap
+
+    with pytest.raises(ValueError, match="32 MB"):
+        check_memory_cap(sample_rate_hz=1_000_000, max_duration_s=4.0, n_pins=1)
+
+
+def test_check_memory_cap_allows_within_real_budget() -> None:
+    """1M samples × 16 bytes = 16 MB < 32 MB cap → allowed regardless of n_pins."""
+    from dwf_mcp.instruments._async_sniff import check_memory_cap
+
+    check_memory_cap(sample_rate_hz=1_000_000, max_duration_s=1.0, n_pins=1)
