@@ -175,3 +175,23 @@ def test_stop_clears_running_so_reconfigure_allowed(awg: AWG) -> None:
     awg.stop(channel=1)
     awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=5.0)
     assert awg._amplitude[1] == 5.0  # noqa: SLF001
+
+
+def test_upload_custom_rejects_waveform_exceeding_output_buffer(tmp_path: Path) -> None:
+    """A custom waveform larger than the device's AnalogOut buffer must be
+    rejected (the AD1's buffer is 4096 vs the AD3's 16384)."""
+    from dwf_mcp.backends.fake import make_fake_device
+
+    dev = DwfDevice(
+        backend=FakeBackend(devices=[make_fake_device(devid=2, analog_out_buffer_max=4096)]),
+        policy=SafetyPolicy(awg_max_amplitude=3.3),
+        allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
+        workspace=tmp_path, idle_timeout_s=60,
+    )
+    dev.open()
+    awg = AWG(device=dev, artifacts=ArtifactWriter(workspace=tmp_path))
+    too_big = np.linspace(-1.0, 1.0, 5000)  # > 4096
+    with pytest.raises(ValueError, match="exceeds the AnalogOut buffer"):
+        awg.upload_custom(channel=1, samples_npy_path=None, _samples=too_big)
+    fits = np.linspace(-1.0, 1.0, 1000)
+    awg.upload_custom(channel=1, samples_npy_path=None, _samples=fits)  # under cap → ok

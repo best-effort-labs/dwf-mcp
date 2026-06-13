@@ -18,6 +18,8 @@ _FAKE_DEVICE = DeviceInfo(
     analog_in_buffer_max=16384,
     digital_in_buffer_max=16384,
     digital_word_width=16,
+    analog_out_buffer_max=16384,
+    digital_out_buffer_max=2048,
 )
 
 
@@ -26,6 +28,7 @@ def make_fake_device(
     dio_count: int = 16, analog_in_channels: int = 2, analog_out_channels: int = 4,
     sample_rate_max_hz: float = 100_000_000.0, analog_in_buffer_max: int = 16384,
     digital_in_buffer_max: int = 16384, digital_word_width: int = 16,
+    analog_out_buffer_max: int = 16384, digital_out_buffer_max: int = 2048,
 ) -> DeviceInfo:
     return DeviceInfo(
         serial=serial, model=model, firmware="fake-1.0", devid=devid,
@@ -33,6 +36,8 @@ def make_fake_device(
         analog_in_channels=analog_in_channels, analog_out_channels=analog_out_channels,
         analog_in_buffer_max=analog_in_buffer_max,
         digital_in_buffer_max=digital_in_buffer_max, digital_word_width=digital_word_width,
+        analog_out_buffer_max=analog_out_buffer_max,
+        digital_out_buffer_max=digital_out_buffer_max,
     )
 
 

@@ -141,6 +141,7 @@ class AWG(Instrument):
                 f"custom waveform samples must be in [-1.0, 1.0], "
                 f"got range [{float(samples.min()):.3f}, {float(samples.max()):.3f}]"
             )
+        self.device.validate_awg_samples(len(samples))
         # Re-uploading to a running channel applies the new amplitude to live
         # hardware — gate it like start() before any hardware write.
         if channel in self._running_channels:

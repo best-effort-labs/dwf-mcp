@@ -22,6 +22,7 @@ import numpy as np
 from pydwf import (  # type: ignore[import-untyped]
     DwfAcquisitionMode,
     DwfAnalogCoupling,
+    DwfAnalogOutNode,
     DwfEnumFilter,
     DwfLibrary,
     DwfState,
@@ -97,6 +98,16 @@ class PydwfBackend(DwfBackend):
         ai = device.analogIn
         di = device.digitalIn
         devid, _hwrev = enum.deviceType(target_index)
+        # Output buffer maxima (custom-waveform / pattern capacity). Defensive: a
+        # device that can't report them leaves 0, which disables the size check.
+        try:
+            ao_buffer_max = int(device.analogOut.nodeDataInfo(0, DwfAnalogOutNode.Carrier)[1])
+        except Exception:
+            ao_buffer_max = 0
+        try:
+            do_buffer_max = int(device.digitalOut.dataInfo(0))
+        except Exception:
+            do_buffer_max = 0
         info = DeviceInfo(
             serial=enum.serialNumber(target_index),
             model=enum.deviceName(target_index),
@@ -109,6 +120,8 @@ class PydwfBackend(DwfBackend):
             analog_in_buffer_max=int(ai.bufferSizeInfo()[1]),
             digital_in_buffer_max=int(di.bufferSizeInfo()),
             digital_word_width=int(di.bitsInfo()),
+            analog_out_buffer_max=ao_buffer_max,
+            digital_out_buffer_max=do_buffer_max,
         )
         self._device = device
         self._info = info

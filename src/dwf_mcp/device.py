@@ -126,6 +126,17 @@ class DwfDevice:
                 f"{self._info.sample_rate_max_hz} on {self._device_name()}"
             )
 
+    def validate_awg_samples(self, n_samples: int) -> None:
+        """Reject a custom AWG waveform that exceeds the device's AnalogOut buffer.
+        Skipped when the buffer size is unknown (0)."""
+        assert self._info is not None
+        cap = self._info.analog_out_buffer_max
+        if cap > 0 and n_samples > cap:
+            raise ValueError(
+                f"custom waveform has {n_samples} samples, exceeds the AnalogOut "
+                f"buffer ({cap}) on {self._device_name()}"
+            )
+
     def validate_supply_voltage(self, channel: str, voltage: float) -> None:
         """On devices with fixed (non-programmable) supplies, reject any voltage
         other than the rail's fixed value. No-op for programmable supplies."""

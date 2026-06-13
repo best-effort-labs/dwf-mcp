@@ -29,6 +29,8 @@ class DeviceInfo:
     analog_in_buffer_max: int = 0
     digital_in_buffer_max: int = 0
     digital_word_width: int = 16
+    analog_out_buffer_max: int = 0
+    digital_out_buffer_max: int = 0
 
 
 class DwfBackend(ABC):
