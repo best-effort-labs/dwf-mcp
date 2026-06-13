@@ -9,7 +9,7 @@ from dwf_mcp.allocator import ResourceGroup
 
 _ALL_INSTRUMENTS = frozenset({
     "scope", "awg", "supply", "logic", "pattern", "dio", "dmm",
-    "i2c", "spi", "uart", "can", "sniff",
+    "i2c", "spi", "uart", "can", "sniff", "decoder",
 })
 
 

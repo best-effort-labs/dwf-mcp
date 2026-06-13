@@ -32,3 +32,14 @@ def test_build_resource_groups_from_caps() -> None:
     awg = next(g for g in groups if g.name == "awg_clock")
     assert awg.exclusive is True
     assert awg.pins == frozenset({"awg1", "awg2"})
+
+
+def test_classic_profile_supports_all_registered_instruments(tmp_path) -> None:
+    """The supported-instrument gate must not block any instrument the server
+    actually registers (caught the 'decoder' omission). Guards against drift."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    registered = set(app.registry.names())
+    supported = resolve_profile(10).supported_instruments
+    missing = registered - supported
+    assert missing == set(), f"classic profile missing registered instruments: {missing}"
