@@ -426,3 +426,83 @@ async def test_genuine_error_with_device_present_is_not_swallowed(tmp_path, monk
     monkeypatch.setattr(fake, "supply_node_set", boom)
     with pytest.raises(RuntimeError, match="genuine backend bug"):
         await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+
+
+@pytest.mark.asyncio
+async def test_idle_close_clears_instruments_immediately(tmp_path, monkeypatch) -> None:
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path), idle_timeout_s=0.0)
+    await app.call_tool("waveforms.open", {})
+    await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+    assert "supply" in app.instruments
+    app.device.tick_idle()  # idle_timeout_s=0 -> closes -> on_close clears instruments
+    assert not app.device.is_open
+    assert app.instruments == {}
+
+
+@pytest.mark.asyncio
+async def test_open_different_serial_while_open_errors(tmp_path) -> None:
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    result = await app.call_tool("waveforms.open", {"device_serial": "OTHER-SERIAL"})
+    assert "error" in result
+    assert "already open" in result["error"]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_instrument_returns_error(tmp_path, monkeypatch) -> None:
+    import dataclasses
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {})
+    # DeviceProfile is frozen; replace the whole profile (device.profile is mutable).
+    app.device.profile = dataclasses.replace(
+        app.device.profile, supported_instruments=frozenset({"scope"})
+    )
+    result = await app.call_tool("supply.set", {"channel": "vpos", "voltage": 3.0})
+    assert result["error"]["type"] == "InstrumentNotConfigured"
+    assert "not available on this device" in result["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_open_passes_device_config_strategy_to_backend(tmp_path) -> None:
+    """waveforms.open(device_config=...) plumbs the strategy down to the backend,
+    and the tool schema advertises the available strategies to the client."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {"device_config": "max_digital_in"})
+    assert app.device.backend.last_device_config == "max_digital_in"
+    # Schema advertises the enum so an LLM can discover/choose it.
+    enum = app._tool_schemas["waveforms.open"]["properties"]["device_config"]["enum"]
+    assert "max_digital_in" in enum and "default" in enum
+
+
+@pytest.mark.asyncio
+async def test_reopen_with_different_device_config_is_rejected(tmp_path) -> None:
+    """device_config is latched at open; an idempotent reopen cannot change it, so
+    a conflicting strategy is rejected rather than silently returning the device on
+    the originally-resolved config."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {"device_config": "max_digital_in"})
+
+    res = await app.call_tool("waveforms.open", {"device_config": "max_analog_in"})
+    assert "error" in res, res
+    assert "device_config" in res["error"]["message"]
+
+    # Idempotent reopen with the same strategy (or none) still succeeds.
+    assert "device" in await app.call_tool("waveforms.open", {"device_config": "max_digital_in"})
+    assert "device" in await app.call_tool("waveforms.open", {})
+
+
+@pytest.mark.asyncio
+async def test_open_unknown_device_config_is_clean_error(tmp_path) -> None:
+    """An unknown device_config strategy is a clean validation error and leaves the
+    device closed — not a DwfDeviceLost mislabel from deep in the open path."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    res = await app.call_tool("waveforms.open", {"device_config": "bogus"})
+    assert "error" in res, res
+    assert res["error"]["type"] != "DwfDeviceLost"
+    assert not app.device.is_open

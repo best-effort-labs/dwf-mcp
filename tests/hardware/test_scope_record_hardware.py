@@ -10,11 +10,14 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+# Self-stimulus (AWG OUT + scope IN): needs both analog directions, so use the
+# default balanced config rather than a max-input one (which shrinks AnalogOut).
 pytestmark = pytest.mark.hardware
 
 
@@ -29,7 +32,14 @@ def app(tmp_path_factory: pytest.TempPathFactory):
 
 @pytest.fixture(scope="module", autouse=True)
 def open_device(app):
-    result = asyncio.run(app.call_tool("waveforms.open", {}))
+    # Honor DWF_TEST_SERIAL so the test targets the *wired* DUT, not the SDK
+    # default device (idx 0). Without this, moving the harness to a different
+    # unit silently tests an unwired device -> empty captures.
+    args = {}
+    serial = os.environ.get("DWF_TEST_SERIAL")
+    if serial:
+        args["device_serial"] = serial
+    result = asyncio.run(app.call_tool("waveforms.open", args))
     assert "device" in result, f"Failed to open device: {result}"
     yield
     asyncio.run(app.call_tool("waveforms.close", {}))

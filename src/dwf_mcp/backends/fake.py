@@ -10,17 +10,42 @@ _FAKE_DEVICE = DeviceInfo(
     serial="FAKE-AD3-0001",
     model="Analog Discovery 3",
     firmware="fake-1.0",
-    sample_rate_max_hz=125_000_000,
+    sample_rate_max_hz=100_000_000.0,
     dio_count=16,
     analog_in_channels=2,
-    analog_out_channels=2,
+    analog_out_channels=4,
+    devid=10,
+    analog_in_buffer_max=16384,
+    digital_in_buffer_max=16384,
+    digital_word_width=16,
+    analog_out_buffer_max=16384,
+    digital_out_buffer_max=2048,
 )
+
+
+def make_fake_device(
+    devid: int = 10, *, serial: str = "FAKE-0001", model: str = "Fake Discovery",
+    dio_count: int = 16, analog_in_channels: int = 2, analog_out_channels: int = 4,
+    sample_rate_max_hz: float = 100_000_000.0, analog_in_buffer_max: int = 16384,
+    digital_in_buffer_max: int = 16384, digital_word_width: int = 16,
+    analog_out_buffer_max: int = 16384, digital_out_buffer_max: int = 2048,
+) -> DeviceInfo:
+    return DeviceInfo(
+        serial=serial, model=model, firmware="fake-1.0", devid=devid,
+        sample_rate_max_hz=sample_rate_max_hz, dio_count=dio_count,
+        analog_in_channels=analog_in_channels, analog_out_channels=analog_out_channels,
+        analog_in_buffer_max=analog_in_buffer_max,
+        digital_in_buffer_max=digital_in_buffer_max, digital_word_width=digital_word_width,
+        analog_out_buffer_max=analog_out_buffer_max,
+        digital_out_buffer_max=digital_out_buffer_max,
+    )
 
 
 class FakeBackend(DwfBackend):
     def __init__(self, devices: list[DeviceInfo] | None = None) -> None:
         self._devices = devices or [_FAKE_DEVICE]
         self._open_info: DeviceInfo | None = None
+        self.last_device_config: str | None = None
         # Scope (AnalogIn) state
         self.scope_calls: list[tuple[str, dict[str, Any]]] = []
         self._scope_canned: dict[int, np.ndarray[Any, Any]] = {}
@@ -85,7 +110,10 @@ class FakeBackend(DwfBackend):
     def enumerate(self) -> list[DeviceInfo]:
         return list(self._devices)
 
-    def open(self, serial: str | None = None) -> DeviceInfo:
+    def open(self, serial: str | None = None, device_config: str | None = None) -> DeviceInfo:
+        # The fake has no hardware config table; record the requested strategy so
+        # tests can assert it was plumbed through, but otherwise ignore it.
+        self.last_device_config = device_config
         if self._open_info is not None:
             return self._open_info
         candidates = [d for d in self._devices if serial is None or d.serial == serial]

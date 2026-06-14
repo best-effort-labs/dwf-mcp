@@ -14,7 +14,7 @@ from dwf_mcp.instrument import Instrument
 
 log = logging.getLogger(__name__)
 
-_PIN_RE = r"^dio([0-9]|1[0-5])$"
+_PIN_RE = r"^dio\d+$"
 
 DECODER_SPI_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -97,6 +97,9 @@ class Decoder(Instrument):
     ) -> dict[str, Any]:
         from dwf_mcp.instruments.decoder.spi import SpiDecoder
 
+        for p in [clk_pin, mosi_pin, miso_pin, cs_pin]:
+            if p is not None:
+                self.device.validate_pin(p)
         loaded = self._load_capture(
             capture_path, {"clk": clk_pin, "mosi": mosi_pin},
         )
@@ -206,6 +209,8 @@ class Decoder(Instrument):
     ) -> dict[str, Any]:
         from dwf_mcp.instruments.decoder.i2c import I2cDecoder
 
+        self.device.validate_pin(sda_pin)
+        self.device.validate_pin(scl_pin)
         loaded = self._load_capture(
             capture_path, {"sda": sda_pin, "scl": scl_pin},
         )
@@ -260,6 +265,7 @@ class Decoder(Instrument):
     ) -> dict[str, Any]:
         from dwf_mcp.instruments.decoder.uart import UartDecoder
 
+        self.device.validate_pin(rx_pin)
         loaded = self._load_capture(capture_path, {"rx": rx_pin})
         if "error" in loaded:
             return loaded
@@ -311,6 +317,7 @@ class Decoder(Instrument):
     ) -> dict[str, Any]:
         from dwf_mcp.instruments.decoder.can import CanDecoder
 
+        self.device.validate_pin(rx_pin)
         loaded = self._load_capture(capture_path, {"rx": rx_pin})
         if "error" in loaded:
             return loaded

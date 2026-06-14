@@ -31,8 +31,25 @@ class PinAllocator:
     resource_groups: list[ResourceGroup] = field(default_factory=list)
     _claims: dict[str, list[str]] = field(default_factory=dict)
     _observe_claims: set[str] = field(default_factory=set)  # instruments with DigitalIn observer claim
+    _known_pins: set[str] | None = field(default=None)  # None = unconfigured (permissive)
+
+    def configure(self, known_pins: set[str], resource_groups: list[ResourceGroup]) -> None:
+        self._known_pins = set(known_pins)
+        self.resource_groups = list(resource_groups)
+
+    def reset_configuration(self) -> None:
+        self._known_pins = None
+        self.resource_groups = []
+        self.clear()
 
     def claim(self, instrument: str, pins: list[str]) -> None:
+        if self._known_pins is not None:
+            unknown = [p for p in pins if p not in self._known_pins]
+            if unknown:
+                raise PinAllocationError(
+                    f"{instrument} cannot claim unknown pin(s) {unknown}; "
+                    f"not present on this device"
+                )
         # Replacement semantics: re-claiming for the same instrument logically
         # releases its old pins. Validate against the tentative post-release view
         # FIRST so a failed re-claim leaves the existing claim untouched (the

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import warnings
 
@@ -60,14 +61,61 @@ def jumperless(pytestconfig: pytest.Config):
         j.close()
 
 
+def _open_args(request: pytest.FixtureRequest) -> dict:
+    """Open args honoring DWF_TEST_SERIAL (which device) and a @device_config
+    marker (which hardware config strategy, e.g. 'max_digital_in')."""
+    args: dict = {}
+    serial = os.environ.get("DWF_TEST_SERIAL")
+    if serial:
+        args["device_serial"] = serial
+    marker = request.node.get_closest_marker("device_config")
+    if marker:
+        args["device_config"] = marker.args[0]
+    return args
+
+
 @pytest.fixture
-def app():
+def app(request):
     a = build_app(backend_name="pydwf")
-    asyncio.run(a.call_tool("waveforms.open", {}))
+    asyncio.run(a.call_tool("waveforms.open", _open_args(request)))
     try:
         yield a
     finally:
         asyncio.run(a.call_tool("waveforms.close", {}))
+
+
+@pytest.fixture
+def device(tmp_path, request):
+    """An opened DwfDevice on the DUT (honors DWF_TEST_SERIAL and a @device_config
+    marker), with a permissive safety policy so functional hardware tests aren't
+    blocked by caps. Instrument hardware tests must use this instead of constructing
+    their own device, so every hardware test runs on the *same* selected device."""
+    from dwf_mcp.allocator import PinAllocator
+    from dwf_mcp.backends.pydwf_backend import PydwfBackend
+    from dwf_mcp.device import DwfDevice
+    from dwf_mcp.policy import SafetyPolicy
+
+    dev = DwfDevice(
+        backend=PydwfBackend(),
+        policy=SafetyPolicy(
+            supply_max_voltage_pos=5.0, supply_max_voltage_neg=-5.0,
+            supply_max_current=1.0, awg_max_amplitude=5.0,
+        ),
+        allocator=PinAllocator(),  # configured from the device profile at open
+        workspace=tmp_path, idle_timeout_s=60,
+    )
+    args = _open_args(request)
+    dev.open(serial=args.get("device_serial"), device_config=args.get("device_config"))
+    try:
+        yield dev
+    finally:
+        dev.close()
+
+
+@pytest.fixture
+def artifacts(device):
+    from dwf_mcp.artifacts import ArtifactWriter
+    return ArtifactWriter(workspace=device.workspace)
 
 
 @pytest.fixture(autouse=True)

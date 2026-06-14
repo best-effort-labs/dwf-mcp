@@ -25,6 +25,12 @@ class DeviceInfo:
     dio_count: int
     analog_in_channels: int
     analog_out_channels: int
+    devid: int = 0
+    analog_in_buffer_max: int = 0
+    digital_in_buffer_max: int = 0
+    digital_word_width: int = 16
+    analog_out_buffer_max: int = 0
+    digital_out_buffer_max: int = 0
 
 
 class DwfBackend(ABC):
@@ -32,7 +38,10 @@ class DwfBackend(ABC):
     def enumerate(self) -> list[DeviceInfo]: ...
 
     @abstractmethod
-    def open(self, serial: str | None = None) -> DeviceInfo: ...
+    def open(self, serial: str | None = None, device_config: str | None = None) -> DeviceInfo:
+        """Open a device. ``device_config`` is a config-selection strategy
+        ("default" / "max_digital_in" / "max_analog_in"); see devices/configs.py."""
+        ...
 
     @abstractmethod
     def close(self) -> None: ...

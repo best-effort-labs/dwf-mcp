@@ -17,6 +17,7 @@ from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.streaming import (
     RecordingSession,
+    compute_poll_interval,
     flush_pending_notifications,
     notification_loop,
     process_chunk,
@@ -34,14 +35,14 @@ SCOPE_CONFIGURE_SCHEMA: dict[str, Any] = {
     "properties": {
         "channels": {
             "type": "array",
-            "items": {"type": "integer", "enum": [1, 2]},
+            "items": {"type": "integer", "minimum": 1},
             "minItems": 1,
             "uniqueItems": True,
         },
         "range_v": {"type": "number", "minimum": 0.01, "maximum": 50.0},
         "offset_v": {"type": "number", "default": 0.0},
         "coupling": {"type": "string", "enum": ["DC", "AC"], "default": "DC"},
-        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 125_000_000.0},
+        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 1_000_000_000.0},
         "buffer_size": {"type": "integer", "minimum": 16, "maximum": 1_048_576},
     },
 }
@@ -54,7 +55,7 @@ SCOPE_TRIGGER_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": ["none", "detector_analog_in", "external1", "external2"],
         },
-        "channel": {"type": "integer", "enum": [1, 2]},
+        "channel": {"type": "integer", "minimum": 1},
         "level_v": {"type": "number", "default": 0.0},
         "condition": {
             "type": "string",
@@ -80,14 +81,14 @@ SCOPE_RECORD_START_SCHEMA: dict[str, Any] = {
     "properties": {
         "channels": {
             "type": "array",
-            "items": {"type": "integer", "enum": [1, 2]},
+            "items": {"type": "integer", "minimum": 1},
             "minItems": 1,
             "uniqueItems": True,
         },
         "range_v": {"type": "number", "minimum": 0.01, "maximum": 50.0},
         "offset_v": {"type": "number", "default": 0.0},
         "coupling": {"type": "string", "enum": ["DC", "AC"], "default": "DC"},
-        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 125_000_000.0},
+        "sample_rate_hz": {"type": "number", "minimum": 1.0, "maximum": 1_000_000_000.0},
         "duration_s": {"type": "number", "minimum": 0.001},
         "output_path": {"type": "string"},
     },
@@ -138,6 +139,9 @@ class Scope(Instrument):
             raise ValueError(
                 f"coupling must be one of {sorted(_VALID_COUPLINGS)}, got {coupling!r}"
             )
+        for ch in channels:
+            self.device.validate_channel(ch, "scope")
+        self.device.validate_rate(sample_rate_hz)
         pin_names = [f"scope{c}" for c in channels]
         self.device.allocator.claim("scope", pin_names)
         self._config = None
@@ -187,6 +191,8 @@ class Scope(Instrument):
             raise ValueError(
                 f"condition must be one of {sorted(_VALID_CONDITIONS)}, got {condition!r}"
             )
+        if channel is not None:
+            self.device.validate_channel(channel, "scope")
         self.device.backend.scope_set_trigger(
             source=source,
             channel=channel,
@@ -277,6 +283,9 @@ class Scope(Instrument):
             raise ValueError(
                 f"coupling must be one of {sorted(_VALID_COUPLINGS)}, got {coupling!r}"
             )
+        for ch in channels:
+            self.device.validate_channel(ch, "scope")
+        self.device.validate_rate(sample_rate_hz)
         # Implicit buffer release when switching from buffer to record mode.
         if self._mode == "buffer":
             self.device.allocator.release("scope")
@@ -320,12 +329,16 @@ class Scope(Instrument):
                 "output_path": output_path,
             },
         )
+        poll_interval_s = compute_poll_interval(
+            self.device.require_open().analog_in_buffer_max, sample_rate_hz
+        )
         try:
             session.task = asyncio.create_task(
                 record_loop(
                     session,
                     self.device.backend.scope_record_status,
                     self.device.backend.scope_record_read,
+                    poll_interval_s=poll_interval_s,
                 )
             )
             if on_chunk is not None:

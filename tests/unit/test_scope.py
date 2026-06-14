@@ -137,6 +137,7 @@ def test_configure_backend_failure_leaves_instrument_unconfigured(
 def test_configure_first_call_failure_does_not_leak_pins(device: DwfDevice, tmp_path: Path) -> None:
     """If a fresh configure (no prior state) fails mid-backend, pins must be released."""
     from dwf_mcp.artifacts import ArtifactWriter
+    device.open()  # validate_channel needs live inventory
     scope = Scope(device=device, artifacts=ArtifactWriter(workspace=tmp_path))
     backend = scope.device.backend
     original = backend.scope_configure

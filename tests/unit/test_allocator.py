@@ -150,3 +150,36 @@ def test_exclusive_digital_in_blocked_while_observer_active() -> None:
     alloc.claim_observe("sniff_i2c_X")
     with pytest.raises(PinAllocationError):
         alloc.claim("logic", ["digital_in"])
+
+
+# --- Task 5: configure / reset_configuration + unknown-pin rejection ---
+
+def test_configure_sets_known_pins_and_groups() -> None:
+    a = PinAllocator()
+    a.configure(known_pins={"dio0", "dio1", "digital_in"},
+                resource_groups=[ResourceGroup("g", {"dio0"}, exclusive=True)])
+    a.claim("logic", ["dio0"])  # known → ok
+    assert a.claimed_pins() == {"dio0": "logic"}
+
+
+def test_claim_unknown_pin_rejected_when_configured() -> None:
+    a = PinAllocator()
+    a.configure(known_pins={"dio0"}, resource_groups=[])
+    with pytest.raises(PinAllocationError, match="unknown pin"):
+        a.claim("logic", ["dio99"])
+
+
+def test_unconfigured_allocator_accepts_any_pin() -> None:
+    # Back-compat: before configure() (no device open), don't enforce.
+    a = PinAllocator()
+    a.claim("logic", ["dio0"])  # no raise
+
+
+def test_reset_configuration_clears_groups_and_known() -> None:
+    a = PinAllocator()
+    a.configure(known_pins={"dio0"}, resource_groups=[ResourceGroup("g", {"dio0"})])
+    a.claim("logic", ["dio0"])
+    a.reset_configuration()
+    assert a.resource_groups == []
+    assert a.claimed_pins() == {}
+    a.claim("x", ["dioZZ"])  # unconfigured again → permissive

@@ -23,7 +23,12 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
-from dwf_mcp.streaming import RecordingSession, process_chunk, record_loop
+from dwf_mcp.streaming import (
+    RecordingSession,
+    compute_poll_interval,
+    process_chunk,
+    record_loop,
+)
 
 log = logging.getLogger(__name__)
 
@@ -159,12 +164,16 @@ def start_observe_session(
         record_session.on_chunk_sync = (
             lambda chunk, _s=session, _d=decoder: _s.transactions.extend(_d.feed(chunk))
         )
+    poll_interval_s = compute_poll_interval(
+        device.require_open().digital_in_buffer_max, sample_rate_hz
+    )
     try:
         record_session.task = asyncio.create_task(
             record_loop(
                 record_session,
                 device.backend.logic_record_status,
                 device.backend.logic_record_read,
+                poll_interval_s=poll_interval_s,
             )
         )
     except Exception:

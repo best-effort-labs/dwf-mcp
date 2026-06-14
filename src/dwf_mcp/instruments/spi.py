@@ -79,6 +79,8 @@ class SPI(Instrument):
         bit_order: str = "msb",
     ) -> dict[str, Any]:
         pins = [p for p in [clk_pin, mosi_pin, miso_pin, cs_pin] if p is not None]
+        for p in pins:
+            self.device.validate_pin(p)
         clk_idx = _dio_index(clk_pin)
         mosi_idx = _dio_index(mosi_pin) if mosi_pin else None
         miso_idx = _dio_index(miso_pin) if miso_pin else None

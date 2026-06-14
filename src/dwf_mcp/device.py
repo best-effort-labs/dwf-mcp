@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfDeviceLost
+from dwf_mcp.devices.inventory import PinInventory, build_inventory
+from dwf_mcp.devices.profiles import DeviceProfile, resolve_profile
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 
 log = logging.getLogger(__name__)
@@ -44,6 +48,10 @@ class DwfDevice:
         self._info: DeviceInfo | None = None
         self._last_activity: float | None = None
         self._serial_request: str | None = None
+        self._config_request: str | None = None
+        self.profile: DeviceProfile | None = None
+        self.inventory: PinInventory | None = None
+        self.on_close: Callable[[], None] | None = None
 
     @property
     def is_open(self) -> bool:
@@ -51,32 +59,100 @@ class DwfDevice:
             return False
         # If backend dropped out from under us (unplug), reflect that.
         if not self.backend.is_open:
-            self._info = None
-            self.allocator.clear()
+            self.close()
             return False
         return True
 
-    def open(self, serial: str | None = None) -> DeviceInfo:
+    def open(self, serial: str | None = None, device_config: str | None = None) -> DeviceInfo:
         if self.is_open:
             return self._info  # type: ignore[return-value]
-        info = self.backend.open(serial=serial)
+        info = self.backend.open(serial=serial, device_config=device_config)
+        try:
+            self.profile = resolve_profile(info.devid)
+            self.inventory = build_inventory(self.profile, info)
+            self.allocator.configure(
+                known_pins=self.inventory.all_known(),
+                resource_groups=self.profile.build_resource_groups(
+                    analog_in_channels=info.analog_in_channels,
+                    user_awg_count=self.profile.user_awg_count,
+                ),
+            )
+        except Exception:
+            self.profile = None
+            self.inventory = None
+            self.allocator.reset_configuration()
+            with contextlib.suppress(Exception):
+                self.backend.close()
+            raise
         self._info = info
         self._serial_request = serial
+        self._config_request = device_config
         self.mark_activity()
         return info
 
     def close(self) -> None:
-        self.allocator.clear()
+        self.allocator.reset_configuration()
         if self.backend.is_open:
             self.backend.close()
         self._info = None
+        self.profile = None
+        self.inventory = None
         self._last_activity = None
+        if self.on_close is not None:
+            self.on_close()
 
     def require_open(self) -> DeviceInfo:
         if not self.is_open:
             raise DwfDeviceLost("device session is not open (closed, unplugged, or idle-expired)")
         self.mark_activity()
         return self._info  # type: ignore[return-value]
+
+    def validate_pin(self, pin: str) -> None:
+        if self.inventory is None or not self.inventory.is_valid_pin(pin):
+            raise ValueError(f"pin {pin!r} is not available on {self._device_name()}")
+
+    def validate_channel(self, channel: int, kind: str) -> None:
+        assert self._info is not None
+        count = (self._info.analog_in_channels if kind == "scope"
+                 else self.profile.user_awg_count if self.profile else 0)
+        if not (1 <= channel <= count):
+            raise ValueError(
+                f"{kind} channel {channel} out of range 1..{count} on {self._device_name()}"
+            )
+
+    def validate_rate(self, rate_hz: float) -> None:
+        assert self._info is not None
+        if rate_hz > self._info.sample_rate_max_hz:
+            raise ValueError(
+                f"sample_rate_hz {rate_hz} exceeds device max "
+                f"{self._info.sample_rate_max_hz} on {self._device_name()}"
+            )
+
+    def validate_awg_samples(self, n_samples: int) -> None:
+        """Reject a custom AWG waveform that exceeds the device's AnalogOut buffer.
+        Skipped when the buffer size is unknown (0)."""
+        assert self._info is not None
+        cap = self._info.analog_out_buffer_max
+        if cap > 0 and n_samples > cap:
+            raise ValueError(
+                f"custom waveform has {n_samples} samples, exceeds the AnalogOut "
+                f"buffer ({cap}) on {self._device_name()}"
+            )
+
+    def validate_supply_voltage(self, channel: str, voltage: float) -> None:
+        """On devices with fixed (non-programmable) supplies, reject any voltage
+        other than the rail's fixed value. No-op for programmable supplies."""
+        fixed = self.profile.fixed_supply_voltages if self.profile else None
+        if fixed is not None and channel in fixed:
+            expected = fixed[channel]
+            if abs(voltage - expected) > 1e-6:
+                raise ValueError(
+                    f"supply rail {channel!r} on {self._device_name()} is fixed at "
+                    f"{expected} V; cannot set {voltage} V"
+                )
+
+    def _device_name(self) -> str:
+        return self.profile.name if self.profile else "no device"
 
     def mark_activity(self) -> None:
         self._last_activity = time.monotonic()
@@ -173,6 +249,9 @@ class DwfDevice:
                 "serial": self._info.serial,
                 "model": self._info.model,
                 "firmware": self._info.firmware,
+                "devid": self._info.devid,
+                "dio_count": self._info.dio_count,
+                "sample_rate_max_hz": self._info.sample_rate_max_hz,
             }
         return {
             "open": self.is_open,

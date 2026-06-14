@@ -14,6 +14,7 @@ the libdwf runtime version string as a best-effort "firmware" field.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -22,6 +23,8 @@ import numpy as np
 from pydwf import (  # type: ignore[import-untyped]
     DwfAcquisitionMode,
     DwfAnalogCoupling,
+    DwfAnalogOutNode,
+    DwfEnumConfigInfo,
     DwfEnumFilter,
     DwfLibrary,
     DwfState,
@@ -30,6 +33,7 @@ from pydwf import (  # type: ignore[import-untyped]
 )
 
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfBackendError
+from dwf_mcp.devices.configs import DeviceConfig, resolve_config_index
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +49,22 @@ class PydwfBackend(DwfBackend):
         self._spi_cs_idx: int | None = None
         self._spi_cs_assert_level = 0
         self._spi_cs_idle_level = 1
+        # Config table of the open device (populated at open, for status reporting).
+        self._configs: list[DeviceConfig] = []
+
+    def _query_configs(self, device_index: int) -> list[DeviceConfig]:
+        ee = self._dwf.deviceEnum
+        nc = ee.enumerateConfigurations(device_index)
+        return [
+            DeviceConfig(
+                index=c,
+                digital_in_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.DigitalInBufferSize)),
+                analog_in_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.AnalogInBufferSize)),
+                analog_out_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.AnalogOutBufferSize)),
+                digital_out_buffer=int(ee.configInfo(c, DwfEnumConfigInfo.DigitalOutBufferSize)),
+            )
+            for c in range(nc)
+        ]
 
     # DwfEnumFilter.Type tells libdwf to interpret the low bits as connection-type flags
     # rather than the legacy device-type codes (where 1 = Electronics Explorer).
@@ -68,6 +88,7 @@ class PydwfBackend(DwfBackend):
                     serial=serial,
                     model=name,
                     firmware="",  # filled on open (best-effort)
+                    devid=int(enum.deviceType(i)[0]),
                     sample_rate_max_hz=125_000_000,  # AD3 nominal; refine on open
                     dio_count=16,
                     analog_in_channels=2,
@@ -76,7 +97,7 @@ class PydwfBackend(DwfBackend):
             )
         return out
 
-    def open(self, serial: str | None = None) -> DeviceInfo:
+    def open(self, serial: str | None = None, device_config: str | None = None) -> DeviceInfo:
         if self._info is not None:
             return self._info
         enum = self._dwf.deviceEnum
@@ -88,19 +109,54 @@ class PydwfBackend(DwfBackend):
                 break
         if target_index is None:
             raise DwfBackendError(f"no Digilent device matches serial {serial!r}")
-        device = self._dwf.deviceControl.open(target_index)
+        # Pick a hardware configuration. On the AD1/AD2 (shared IOs) configs trade
+        # off buffer allocation; the SDK default has a small DigitalIn buffer. The
+        # caller's strategy ("max_digital_in" etc.) resolves to a config index via
+        # the device's config table. DWF_DEVICE_CONFIG is a raw-index override.
+        self._configs = self._query_configs(target_index)
+        env = os.environ.get("DWF_DEVICE_CONFIG")
+        config_index = int(env) if env else resolve_config_index(self._configs, device_config)
+        try:
+            device = self._dwf.deviceControl.open(target_index, config_index)
+        except Exception:
+            # A failed open can leave a stale handle that cascades into later opens;
+            # clear all handles so the next attempt starts clean.
+            try:
+                self._dwf.deviceControl.closeAll()
+            except Exception as exc:
+                log.warning("closeAll after failed open: %s", exc)
+            raise
         try:
             firmware = self._dwf.getVersion()
         except Exception:
             firmware = ""
+        ai = device.analogIn
+        di = device.digitalIn
+        devid, _hwrev = enum.deviceType(target_index)
+        # Output buffer maxima (custom-waveform / pattern capacity). Defensive: a
+        # device that can't report them leaves 0, which disables the size check.
+        try:
+            ao_buffer_max = int(device.analogOut.nodeDataInfo(0, DwfAnalogOutNode.Carrier)[1])
+        except Exception:
+            ao_buffer_max = 0
+        try:
+            do_buffer_max = int(device.digitalOut.dataInfo(0))
+        except Exception:
+            do_buffer_max = 0
         info = DeviceInfo(
             serial=enum.serialNumber(target_index),
             model=enum.deviceName(target_index),
             firmware=firmware,
-            sample_rate_max_hz=125_000_000,
-            dio_count=16,
-            analog_in_channels=2,
-            analog_out_channels=2,
+            devid=int(devid),
+            sample_rate_max_hz=float(ai.frequencyInfo()[1]),
+            dio_count=int(di.bitsInfo()),
+            analog_in_channels=int(ai.channelCount()),
+            analog_out_channels=int(device.analogOut.count()),
+            analog_in_buffer_max=int(ai.bufferSizeInfo()[1]),
+            digital_in_buffer_max=int(di.bufferSizeInfo()),
+            digital_word_width=int(di.bitsInfo()),
+            analog_out_buffer_max=ao_buffer_max,
+            digital_out_buffer_max=do_buffer_max,
         )
         self._device = device
         self._info = info

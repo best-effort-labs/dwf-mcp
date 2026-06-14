@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, ClassVar
 
 import numpy as np
@@ -9,6 +10,15 @@ from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.policy import SafetyViolation
 from dwf_mcp.server import build_app
+
+
+def _allow_echo(app: Any) -> None:
+    """Add the test-only ``echo`` instrument to the open device's supported set so
+    the server's supported-instrument gate doesn't reject it. Call after open."""
+    app.device.profile = dataclasses.replace(
+        app.device.profile,
+        supported_instruments=app.device.profile.supported_instruments | {"echo"},
+    )
 
 
 @pytest.mark.asyncio
@@ -77,6 +87,7 @@ async def test_register_instrument_dispatches_to_method(tmp_path) -> None:
     app = build_app(backend_name="fake", workspace=str(tmp_path))
     app.register_instrument(_Echo)
     await app.call_tool("waveforms.open", {})
+    _allow_echo(app)
     result = await app.call_tool("echo.ping", {})
     assert result == {"pong": "ok"}
 
@@ -87,6 +98,7 @@ async def test_register_instrument_lazy_instantiation(tmp_path) -> None:
     app.register_instrument(_Echo)
     assert "echo" not in app.instruments  # not yet created
     await app.call_tool("waveforms.open", {})
+    _allow_echo(app)
     await app.call_tool("echo.ping", {})
     assert "echo" in app.instruments
 
@@ -96,6 +108,7 @@ async def test_safety_violation_maps_to_error_result(tmp_path) -> None:
     app = build_app(backend_name="fake", workspace=str(tmp_path))
     app.register_instrument(_Echo)
     await app.call_tool("waveforms.open", {})
+    _allow_echo(app)
     result = await app.call_tool("echo.boom_safety", {})
     assert result["error"]["type"] == "SafetyViolation"
     assert "over-voltage" in result["error"]["message"]
@@ -106,6 +119,7 @@ async def test_instrument_not_configured_maps_to_error_result(tmp_path) -> None:
     app = build_app(backend_name="fake", workspace=str(tmp_path))
     app.register_instrument(_Echo)
     await app.call_tool("waveforms.open", {})
+    _allow_echo(app)
     result = await app.call_tool("echo.boom_unconfigured", {})
     assert result["error"]["type"] == "InstrumentNotConfigured"
 
@@ -123,6 +137,7 @@ async def test_release_called_on_close(tmp_path) -> None:
     app = build_app(backend_name="fake", workspace=str(tmp_path))
     app.register_instrument(_Echo)
     await app.call_tool("waveforms.open", {})
+    _allow_echo(app)
     await app.call_tool("echo.ping", {})  # instantiates echo
     echo = app.instruments["echo"]
     released = {"called": False}

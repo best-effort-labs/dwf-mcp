@@ -20,6 +20,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from pathlib import Path
 
@@ -28,7 +29,7 @@ import pytest
 
 from tests.hardware.conftest import wait_for_sniff_claim
 
-pytestmark = pytest.mark.hardware
+pytestmark = [pytest.mark.hardware, pytest.mark.device_config("max_digital_in")]
 
 
 @pytest.fixture(scope="module")
@@ -41,8 +42,19 @@ def app(tmp_path_factory: pytest.TempPathFactory):
 
 
 @pytest.fixture(scope="module", autouse=True)
-def open_device(app):
-    result = asyncio.run(app.call_tool("waveforms.open", {}))
+def open_device(app, request):
+    # Honor DWF_TEST_SERIAL (target the wired DUT, not SDK default idx 0) and the
+    # module-level device_config marker (max_digital_in -> no DigitalIn overflow
+    # on small-buffer units). Without this, the test silently runs on an unwired
+    # device at the default config.
+    args = {}
+    serial = os.environ.get("DWF_TEST_SERIAL")
+    if serial:
+        args["device_serial"] = serial
+    marker = request.node.get_closest_marker("device_config")
+    if marker:
+        args["device_config"] = marker.args[0]
+    result = asyncio.run(app.call_tool("waveforms.open", args))
     assert "device" in result, f"Failed to open device: {result}"
     yield
     asyncio.run(app.call_tool("waveforms.close", {}))

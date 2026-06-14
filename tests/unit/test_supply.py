@@ -217,3 +217,26 @@ def test_set_failure_restores_prior_setpoint_on_reset_of_same_channel(
     assert supply._setpoints["vpos"] == {"voltage": 2.5, "current_limit": 0.3}  # noqa: SLF001
     # vpos still claimed (was claimed before, should stay claimed).
     assert supply.device.allocator.claimed_pins() == {"vpos": "supply"}
+
+
+def test_fixed_supply_rejects_off_voltage_and_accepts_fixed(tmp_path: Path) -> None:
+    """The original Analog Discovery (devid 2) has fixed +5/-5 V rails: set()
+    must reject any other voltage and accept the fixed value. A programmable
+    device (devid 10) accepts arbitrary values."""
+    from dwf_mcp.backends.fake import make_fake_device
+
+    ad1 = DwfDevice(
+        backend=FakeBackend(devices=[make_fake_device(devid=2, model="Analog Discovery")]),
+        policy=SafetyPolicy(supply_max_voltage_pos=5.0, supply_max_voltage_neg=-5.0,
+                            supply_max_current=0.5),
+        allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
+        workspace=tmp_path, idle_timeout_s=60,
+    )
+    ad1.open()
+    sup = Supply(device=ad1, artifacts=ArtifactWriter(workspace=tmp_path))
+    with pytest.raises(ValueError, match="fixed at 5.0 V"):
+        sup.set(channel="vpos", voltage=1.0)
+    sup.set(channel="vpos", voltage=5.0)  # the fixed value is accepted
+    sup.set(channel="vneg", voltage=-5.0)
+    with pytest.raises(ValueError, match="fixed at -5.0 V"):
+        sup.set(channel="vneg", voltage=-3.0)

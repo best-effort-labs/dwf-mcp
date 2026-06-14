@@ -36,7 +36,9 @@ packages = ["src/dwf_mcp"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "hardware: requires a physically connected AD3 (deselect with -m 'not hardware')",
+    "hardware: requires a physically connected Analog Discovery (deselect with -m 'not hardware')",
+    "jumperless(connections): Jumperless V5 auto-wiring for a hardware test",
+    "device_config(strategy): open the DUT with a config strategy (e.g. 'max_digital_in')",
 ]
 
 [tool.ruff]

@@ -11,14 +11,8 @@ from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.backend import DwfBackend, DwfDeviceLost
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
-from dwf_mcp.devices.ad3 import (
-    AD3_ANALOG_IN_PINS,
-    AD3_ANALOG_OUT_PINS,
-    AD3_DIO_PINS,
-    AD3_RESOURCE_GROUPS,
-    AD3_SUPPLY_PINS,
-    AD3_TRIGGER_PINS,
-)
+from dwf_mcp.devices.configs import CONFIG_STRATEGIES
+from dwf_mcp.devices.profiles import UnsupportedDeviceError
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.instruments.awg import AWG
 from dwf_mcp.instruments.can import CAN
@@ -44,6 +38,9 @@ _ERROR_TYPES: dict[type[Exception], str] = {
     PinAllocationError: "PinAllocationError",
     DwfDeviceLost: "DwfDeviceLost",
     InstrumentNotConfigured: "InstrumentNotConfigured",
+    # Open-time validation failure (unknown devid) — surface cleanly rather than
+    # letting the generic handler mislabel it as DwfDeviceLost after open cleanup.
+    UnsupportedDeviceError: "UnsupportedDeviceError",
 }
 
 # Tools that manage or report device lifecycle — they must run regardless of
@@ -61,11 +58,10 @@ def _build_backend(name: str) -> DwfBackend:
     raise ValueError(f"unknown backend {name!r}")
 
 
-def _all_pins() -> list[str]:
-    return [
-        *AD3_DIO_PINS, *AD3_ANALOG_IN_PINS, *AD3_ANALOG_OUT_PINS,
-        *AD3_SUPPLY_PINS, *AD3_TRIGGER_PINS,
-    ]
+def _all_pins(device: DwfDevice) -> list[str]:
+    if device.inventory is None:
+        return []
+    return device.inventory.all_physical_pins()
 
 
 class DwfMcpApp:
@@ -84,17 +80,42 @@ class DwfMcpApp:
         self._tools: dict[str, Any] = {}
         self._tool_schemas: dict[str, dict[str, Any]] = {}
         self._register_meta_tools()
+        self.device.on_close = self._on_device_close
+
+    def _on_device_close(self) -> None:
+        self.instruments.clear()
 
     def _register_meta_tools(self) -> None:
         meta_schema = {"type": "object", "properties": {}}
-        for name, handler in [
-            ("waveforms.open", self._tool_open),
-            ("waveforms.close", self._tool_close),
-            ("waveforms.status", self._tool_status),
-            ("waveforms.list_pins", self._tool_list_pins),
+        open_schema = {
+            "type": "object",
+            "properties": {
+                "device_serial": {
+                    "type": "string",
+                    "description": "Open a specific device by serial; omit to use the first found.",
+                },
+                "device_config": {
+                    "type": "string",
+                    "enum": list(CONFIG_STRATEGIES),
+                    "description": (
+                        "Hardware configuration strategy. On shared-IO devices "
+                        "(Analog Discovery 1/2) buffers trade off, so choose by intent: "
+                        "'max_digital_in' before high-rate logic/protocol sniffing, "
+                        "'max_analog_in' before long analog records, else 'default'. "
+                        "Changing it later requires a close + re-open."
+                    ),
+                },
+                "workspace_dir": {"type": "string"},
+            },
+        }
+        for name, handler, schema in [
+            ("waveforms.open", self._tool_open, open_schema),
+            ("waveforms.close", self._tool_close, meta_schema),
+            ("waveforms.status", self._tool_status, meta_schema),
+            ("waveforms.list_pins", self._tool_list_pins, meta_schema),
         ]:
             self._tools[name] = self._wrap_meta_handler(handler)
-            self._tool_schemas[name] = meta_schema
+            self._tool_schemas[name] = schema
 
     @staticmethod
     def _wrap_meta_handler(handler: Any) -> Any:
@@ -133,6 +154,12 @@ class DwfMcpApp:
             # the device is open so we surface a clean DwfDeviceLost rather than a
             # backend exception escaping from __init__.
             self.device.require_open()
+            if (self.device.profile is not None
+                    and name not in self.device.profile.supported_instruments):
+                raise InstrumentNotConfigured(
+                    f"instrument {name!r} is not available on this device "
+                    f"({self.device.profile.name})"
+                )
             cls = self.registry.get_class(name)
             self.instruments[name] = cls(device=self.device, artifacts=self.artifacts)
         return self.instruments[name]
@@ -158,7 +185,11 @@ class DwfMcpApp:
             except DwfDeviceLost as exc:
                 self._reset_after_device_lost()
                 return self._error_payload(exc)
-        self.device.tick_idle()
+        # Automatic idle reaping between tool calls is armed only for a positive
+        # timeout; idle_timeout_s <= 0 disables auto-close (an explicit
+        # device.tick_idle() still evaluates the configured timeout directly).
+        if self.device.idle_timeout_s > 0:
+            self.device.tick_idle()
         # Give every live instrument a chance to reap idle/background state (e.g.
         # orphan sniff sessions) regardless of which tool was called.
         for instrument in list(self.instruments.values()):
@@ -198,6 +229,30 @@ class DwfMcpApp:
         }
 
     async def _tool_open(self, **kwargs: Any) -> dict[str, Any]:
+        requested_serial = kwargs.get("device_serial")
+        requested_config = kwargs.get("device_config")
+        # Validate the strategy up front so a bad value is a clean error, not a
+        # deep ValueError mislabeled as device-lost during open.
+        if requested_config is not None and requested_config not in CONFIG_STRATEGIES:
+            return self._error_payload(ValueError(
+                f"unknown device_config {requested_config!r}; expected one of {CONFIG_STRATEGIES}"
+            ))
+        if self.device.is_open:
+            current_serial = self.device._info.serial if self.device._info else None
+            if requested_serial not in (None, current_serial):
+                return self._error_payload(DwfDeviceLost(
+                    "a device is already open; close it before opening a different serial"
+                ))
+            # device_config is a hardware choice latched at open; a reopen is
+            # idempotent and cannot change it, so reject a conflicting request
+            # rather than silently returning the device on the old config.
+            def _norm(c: str | None) -> str | None:
+                return None if c in (None, "default") else c
+            if (requested_config is not None
+                    and _norm(requested_config) != _norm(self.device._config_request)):
+                return self._error_payload(DwfDeviceLost(
+                    "a device is already open; close it before changing device_config"
+                ))
         policy_fields = {
             f: kwargs.pop(f) for f in [
                 "supply_max_voltage_pos", "supply_max_voltage_neg", "supply_max_current",
@@ -211,7 +266,8 @@ class DwfMcpApp:
             self.device.workspace = Path(workspace_dir)
             self.artifacts = ArtifactWriter(workspace=self.device.workspace)
         serial = kwargs.pop("device_serial", None)
-        info = self.device.open(serial=serial)
+        device_config = kwargs.pop("device_config", None)
+        info = self.device.open(serial=serial, device_config=device_config)
         return {
             "device": {
                 "serial": info.serial,
@@ -219,6 +275,8 @@ class DwfMcpApp:
                 "firmware": info.firmware,
                 "sample_rate_max_hz": info.sample_rate_max_hz,
                 "dio_count": info.dio_count,
+                "digital_in_buffer_max": info.digital_in_buffer_max,
+                "analog_in_buffer_max": info.analog_in_buffer_max,
             },
             "workspace": str(self.device.workspace),
         }
@@ -234,14 +292,21 @@ class DwfMcpApp:
         return self.device.status()
 
     async def _tool_list_pins(self) -> dict[str, Any]:
-        self.device.require_open()
+        info = self.device.require_open()
+        assert self.device.profile is not None  # guaranteed once the device is open
         return {
-            "all_pins": _all_pins(),
+            "all_pins": _all_pins(self.device),
             "claimed": self.device.allocator.claimed_pins(),
             "resource_groups": [
                 {"name": g.name, "pins": sorted(g.pins), "exclusive": g.exclusive}
                 for g in self.device.allocator.resource_groups
             ],
+            "limits": {
+                "dio_count": info.dio_count,
+                "analog_in_channels": info.analog_in_channels,
+                "user_awg_channels": self.device.profile.user_awg_count,
+                "sample_rate_max_hz": info.sample_rate_max_hz,
+            },
         }
 
 
@@ -254,7 +319,7 @@ def build_app(
     backend_name = backend_name or os.environ.get("DWF_BACKEND", "pydwf")
     workspace = workspace or os.environ.get("DWF_WORKSPACE")
     backend = _build_backend(backend_name)
-    allocator = PinAllocator(resource_groups=AD3_RESOURCE_GROUPS)
+    allocator = PinAllocator()  # resource groups configured at device open
     device = DwfDevice(
         backend=backend,
         policy=SafetyPolicy(),
