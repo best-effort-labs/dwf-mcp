@@ -12,6 +12,7 @@ from dwf_mcp.backend import DwfBackend, DwfDeviceLost
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.devices.configs import CONFIG_STRATEGIES
+from dwf_mcp.devices.profiles import UnsupportedDeviceError
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.instruments.awg import AWG
 from dwf_mcp.instruments.can import CAN
@@ -37,6 +38,9 @@ _ERROR_TYPES: dict[type[Exception], str] = {
     PinAllocationError: "PinAllocationError",
     DwfDeviceLost: "DwfDeviceLost",
     InstrumentNotConfigured: "InstrumentNotConfigured",
+    # Open-time validation failure (unknown devid) — surface cleanly rather than
+    # letting the generic handler mislabel it as DwfDeviceLost after open cleanup.
+    UnsupportedDeviceError: "UnsupportedDeviceError",
 }
 
 # Tools that manage or report device lifecycle — they must run regardless of
@@ -226,11 +230,28 @@ class DwfMcpApp:
 
     async def _tool_open(self, **kwargs: Any) -> dict[str, Any]:
         requested_serial = kwargs.get("device_serial")
+        requested_config = kwargs.get("device_config")
+        # Validate the strategy up front so a bad value is a clean error, not a
+        # deep ValueError mislabeled as device-lost during open.
+        if requested_config is not None and requested_config not in CONFIG_STRATEGIES:
+            return self._error_payload(ValueError(
+                f"unknown device_config {requested_config!r}; expected one of {CONFIG_STRATEGIES}"
+            ))
         if self.device.is_open:
             current_serial = self.device._info.serial if self.device._info else None
             if requested_serial not in (None, current_serial):
                 return self._error_payload(DwfDeviceLost(
                     "a device is already open; close it before opening a different serial"
+                ))
+            # device_config is a hardware choice latched at open; a reopen is
+            # idempotent and cannot change it, so reject a conflicting request
+            # rather than silently returning the device on the old config.
+            def _norm(c: str | None) -> str | None:
+                return None if c in (None, "default") else c
+            if (requested_config is not None
+                    and _norm(requested_config) != _norm(self.device._config_request)):
+                return self._error_payload(DwfDeviceLost(
+                    "a device is already open; close it before changing device_config"
                 ))
         policy_fields = {
             f: kwargs.pop(f) for f in [

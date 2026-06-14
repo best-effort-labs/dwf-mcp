@@ -476,3 +476,33 @@ async def test_open_passes_device_config_strategy_to_backend(tmp_path) -> None:
     # Schema advertises the enum so an LLM can discover/choose it.
     enum = app._tool_schemas["waveforms.open"]["properties"]["device_config"]["enum"]
     assert "max_digital_in" in enum and "default" in enum
+
+
+@pytest.mark.asyncio
+async def test_reopen_with_different_device_config_is_rejected(tmp_path) -> None:
+    """device_config is latched at open; an idempotent reopen cannot change it, so
+    a conflicting strategy is rejected rather than silently returning the device on
+    the originally-resolved config."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    await app.call_tool("waveforms.open", {"device_config": "max_digital_in"})
+
+    res = await app.call_tool("waveforms.open", {"device_config": "max_analog_in"})
+    assert "error" in res, res
+    assert "device_config" in res["error"]["message"]
+
+    # Idempotent reopen with the same strategy (or none) still succeeds.
+    assert "device" in await app.call_tool("waveforms.open", {"device_config": "max_digital_in"})
+    assert "device" in await app.call_tool("waveforms.open", {})
+
+
+@pytest.mark.asyncio
+async def test_open_unknown_device_config_is_clean_error(tmp_path) -> None:
+    """An unknown device_config strategy is a clean validation error and leaves the
+    device closed — not a DwfDeviceLost mislabel from deep in the open path."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    res = await app.call_tool("waveforms.open", {"device_config": "bogus"})
+    assert "error" in res, res
+    assert res["error"]["type"] != "DwfDeviceLost"
+    assert not app.device.is_open

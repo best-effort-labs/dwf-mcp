@@ -48,6 +48,7 @@ class DwfDevice:
         self._info: DeviceInfo | None = None
         self._last_activity: float | None = None
         self._serial_request: str | None = None
+        self._config_request: str | None = None
         self.profile: DeviceProfile | None = None
         self.inventory: PinInventory | None = None
         self.on_close: Callable[[], None] | None = None
@@ -85,6 +86,7 @@ class DwfDevice:
             raise
         self._info = info
         self._serial_request = serial
+        self._config_request = device_config
         self.mark_activity()
         return info
 
