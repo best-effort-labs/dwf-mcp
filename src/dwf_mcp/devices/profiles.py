@@ -7,6 +7,15 @@ from dataclasses import dataclass
 
 from dwf_mcp.allocator import ResourceGroup
 
+
+@dataclass(frozen=True)
+class PinBank:
+    """A logical bank of pins on a device (e.g., "DIO" = pins 24-39 on Digital Discovery)."""
+    prefix: str          # "dio" | "din"
+    start: int           # hardware label number of the bank's first pin
+    count: int
+    input_only: bool = False
+
 _ALL_INSTRUMENTS = frozenset({
     "scope", "awg", "supply", "logic", "pattern", "dio", "dmm",
     "i2c", "spi", "uart", "can", "sniff", "decoder",
@@ -27,6 +36,8 @@ class DeviceProfile:
     # Rail -> fixed voltage for devices whose supplies are NOT programmable (the
     # original Analog Discovery has fixed +5/-5 V rails). None = programmable.
     fixed_supply_voltages: dict[str, float] | None = None
+    pin_banks: list[PinBank] | None = None
+    dio_voltage_range: tuple[float, float] | None = None
 
     def build_resource_groups(
         self, analog_in_channels: int, user_awg_count: int
@@ -64,6 +75,15 @@ PROFILE_REGISTRY: dict[int, DeviceProfile] = {
     # AD2 supplies are believed programmable; confirm when one is connected.
     3: _classic(3, "Analog Discovery 2"),
     10: _classic(10, "Analog Discovery 3"),
+    4: DeviceProfile(
+        devid=4,
+        name="Digital Discovery",
+        user_awg_count=0,
+        supported_instruments=frozenset({"dio", "logic", "pattern"}),
+        dio_voltage_options=[],
+        dio_voltage_range=(1.2, 3.3),
+        pin_banks=[PinBank("din", 0, 24, input_only=True), PinBank("dio", 24, 16)],
+    ),
 }
 
 

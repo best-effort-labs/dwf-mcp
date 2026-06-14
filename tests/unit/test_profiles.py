@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from dwf_mcp.devices.profiles import (
+    PinBank,
     UnsupportedDeviceError,
     resolve_profile,
 )
@@ -43,3 +44,27 @@ def test_classic_profile_supports_all_registered_instruments(tmp_path) -> None:
     supported = resolve_profile(10).supported_instruments
     missing = registered - supported
     assert missing == set(), f"classic profile missing registered instruments: {missing}"
+
+
+def test_dd_profile_registered() -> None:
+    p = resolve_profile(4)
+    assert p.name == "Digital Discovery"
+    assert p.user_awg_count == 0
+    assert p.supported_instruments == frozenset({"dio", "logic", "pattern"})
+    assert p.dio_voltage_range == (1.2, 3.3)
+    assert p.pin_banks == [
+        PinBank("din", 0, 24, input_only=True),
+        PinBank("dio", 24, 16),
+    ]
+
+
+def test_classic_profiles_have_no_pin_banks_and_no_range() -> None:
+    for devid in (2, 3, 10):
+        p = resolve_profile(devid)
+        assert p.pin_banks is None
+        assert p.dio_voltage_range is None
+
+
+def test_unsupported_devid_still_raises() -> None:
+    with pytest.raises(UnsupportedDeviceError):
+        resolve_profile(999)
