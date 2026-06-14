@@ -59,6 +59,8 @@ class PydwfBackend(DwfBackend):
         self._spi_cs_idle_level = 1
         # Config table of the open device (populated at open, for status reporting).
         self._configs: list[DeviceConfig] = []
+        # Logic sample bits (16 or 32), set by logic_configure/logic_record_configure.
+        self._logic_sample_bits: int = 16
 
     def _query_configs(self, device_index: int) -> list[DeviceConfig]:
         ee = self._dwf.deviceEnum
@@ -680,7 +682,7 @@ class PydwfBackend(DwfBackend):
         return str(getattr(st, "name", st))
 
     def logic_read(self, count: int) -> np.ndarray:
-        bits = getattr(self, "_logic_sample_bits", 16)
+        bits = self._logic_sample_bits
         # statusData2(offset, count) auto-uses sampleFormatGet() when sample_format is omitted;
         # passing sample_format explicitly avoids an extra SDK round-trip.
         raw = self._digital_in.statusData2(0, count, sample_format=bits)
@@ -728,7 +730,7 @@ class PydwfBackend(DwfBackend):
         return int(available), int(lost), 0 if state == DwfState.Done else 1
 
     def logic_record_read(self, count: int) -> np.ndarray:
-        bits = getattr(self, "_logic_sample_bits", 16)
+        bits = self._logic_sample_bits
         raw = self._digital_in.statusData2(0, count, sample_format=bits)
         if bits == 32:
             arr: np.ndarray = np.array(raw, dtype=np.uint32)
