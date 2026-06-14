@@ -41,6 +41,19 @@ def make_fake_device(
     )
 
 
+def make_dd_device(serial: str = "DD-0001") -> DeviceInfo:
+    return DeviceInfo(
+        serial=serial, model="Digital Discovery", firmware="fake-1.0", devid=4,
+        sample_rate_max_hz=0.0, dio_count=24, analog_in_channels=0,
+        analog_out_channels=0, has_analog_in=False,
+        digital_in_rate_max_hz=800_000_000.0, digital_in_channels=24,
+        digital_out_buffer_max=16384,
+        dio_pull_supported=True, dio_drive_supported=True,
+        dio_drive_amp_min=0.002, dio_drive_amp_max=0.016,
+        dio_drive_amp_steps=6, dio_drive_slew_steps=3,
+    )
+
+
 class FakeBackend(DwfBackend):
     def __init__(self, devices: list[DeviceInfo] | None = None) -> None:
         self._devices = devices or [_FAKE_DEVICE]

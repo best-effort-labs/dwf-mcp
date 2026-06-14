@@ -31,6 +31,15 @@ class DeviceInfo:
     digital_word_width: int = 16
     analog_out_buffer_max: int = 0
     digital_out_buffer_max: int = 0
+    has_analog_in: bool = True
+    digital_in_rate_max_hz: float = 0.0
+    digital_in_channels: int = 0
+    dio_pull_supported: bool = False
+    dio_drive_supported: bool = False
+    dio_drive_amp_min: float = 0.0
+    dio_drive_amp_max: float = 0.0
+    dio_drive_amp_steps: int = 0
+    dio_drive_slew_steps: int = 0
 
 
 class DwfBackend(ABC):
