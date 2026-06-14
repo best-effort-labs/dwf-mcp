@@ -1,7 +1,7 @@
 import pytest
 
 pydwf = pytest.importorskip("pydwf")
-from dwf_mcp.backends.pydwf_backend import _safe_int_call
+from dwf_mcp.backends.pydwf_backend import _safe_int_call  # noqa: E402
 
 
 def test_safe_int_call_returns_zero_on_exception():
