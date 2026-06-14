@@ -13,6 +13,7 @@ the libdwf runtime version string as a best-effort "firmware" field.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 from collections.abc import Iterator
@@ -36,6 +37,13 @@ from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfBackendError
 from dwf_mcp.devices.configs import DeviceConfig, resolve_config_index
 
 log = logging.getLogger(__name__)
+
+
+def _safe_int_call(fn: Any) -> int:
+    try:
+        return int(fn())
+    except Exception:
+        return 0
 
 
 class PydwfBackend(DwfBackend):
@@ -133,34 +141,80 @@ class PydwfBackend(DwfBackend):
         ai = device.analogIn
         di = device.digitalIn
         devid, _hwrev = enum.deviceType(target_index)
-        # Output buffer maxima (custom-waveform / pattern capacity). Defensive: a
-        # device that can't report them leaves 0, which disables the size check.
-        try:
-            ao_buffer_max = int(device.analogOut.nodeDataInfo(0, DwfAnalogOutNode.Carrier)[1])
-        except Exception:
+        analog_in_channels = _safe_int_call(ai.channelCount)
+        has_analog_in = analog_in_channels > 0
+        if has_analog_in:
+            sample_rate_max_hz = float(ai.frequencyInfo()[1])
+            analog_in_buffer_max = int(ai.bufferSizeInfo()[1])
+            analog_out_channels = _safe_int_call(device.analogOut.count)
+            # Output buffer maximum (custom-waveform capacity). Defensive: a
+            # device that can't report it leaves 0, which disables the size check.
+            try:
+                ao_buffer_max = int(device.analogOut.nodeDataInfo(0, DwfAnalogOutNode.Carrier)[1])
+            except Exception:
+                ao_buffer_max = 0
+        else:
+            sample_rate_max_hz = 0.0
+            analog_in_buffer_max = 0
+            analog_out_channels = 0
             ao_buffer_max = 0
         try:
             do_buffer_max = int(device.digitalOut.dataInfo(0))
         except Exception:
             do_buffer_max = 0
+        digital_in_rate_max_hz = float(di.internalClockInfo())
+        digital_in_channels = int(di.bitsInfo())
+        pull_supported, drive_supported, amp_min, amp_max, amp_steps, slew_steps = \
+            self._probe_dio_caps(device)
         info = DeviceInfo(
             serial=enum.serialNumber(target_index),
             model=enum.deviceName(target_index),
             firmware=firmware,
             devid=int(devid),
-            sample_rate_max_hz=float(ai.frequencyInfo()[1]),
-            dio_count=int(di.bitsInfo()),
-            analog_in_channels=int(ai.channelCount()),
-            analog_out_channels=int(device.analogOut.count()),
-            analog_in_buffer_max=int(ai.bufferSizeInfo()[1]),
+            sample_rate_max_hz=sample_rate_max_hz,
+            dio_count=digital_in_channels,
+            analog_in_channels=analog_in_channels,
+            analog_out_channels=analog_out_channels,
+            analog_in_buffer_max=analog_in_buffer_max,
             digital_in_buffer_max=int(di.bufferSizeInfo()),
-            digital_word_width=int(di.bitsInfo()),
+            digital_word_width=digital_in_channels,
             analog_out_buffer_max=ao_buffer_max,
             digital_out_buffer_max=do_buffer_max,
+            has_analog_in=has_analog_in,
+            digital_in_rate_max_hz=digital_in_rate_max_hz,
+            digital_in_channels=digital_in_channels,
+            dio_pull_supported=pull_supported,
+            dio_drive_supported=drive_supported,
+            dio_drive_amp_min=amp_min, dio_drive_amp_max=amp_max,
+            dio_drive_amp_steps=amp_steps, dio_drive_slew_steps=slew_steps,
         )
         self._device = device
         self._info = info
         return info
+
+    def _probe_dio_caps(self, device: Any) -> tuple[bool, bool, float, float, int, int]:
+        dio = device.digitalIO
+        try:
+            pu, _pd = dio.pullInfo()
+            pull_supported = pu != 0
+        except Exception:
+            pull_supported = False
+        amp_min = amp_max = 0.0
+        amp_steps = slew_steps = 0
+        drive_supported = False
+        try:
+            lib, hdwf = dio.lib, dio.hdwf
+            a0, a1 = ctypes.c_double(), ctypes.c_double()
+            s0, s1 = ctypes.c_int(), ctypes.c_int()
+            rc = lib.FDwfDigitalIODriveInfo(hdwf, ctypes.c_int(0),
+                ctypes.byref(a0), ctypes.byref(a1), ctypes.byref(s0), ctypes.byref(s1))
+            if rc and a1.value > 0:
+                drive_supported = True
+                amp_min, amp_max = a0.value, a1.value
+                amp_steps, slew_steps = s0.value, s1.value
+        except Exception:
+            pass
+        return pull_supported, drive_supported, amp_min, amp_max, amp_steps, slew_steps
 
     def close(self) -> None:
         if self._device is not None:

@@ -21,7 +21,10 @@ def _fake_device():
     ao = SimpleNamespace(count=lambda: 4)
     di = SimpleNamespace(bitsInfo=lambda: 16, bufferSizeInfo=lambda: 16384,
                          internalClockInfo=lambda: 100_000_000.0)
-    return SimpleNamespace(analogIn=ai, analogOut=ao, digitalIn=di)
+    # digitalIO: pullInfo raises → pull_supported=False; no lib/hdwf → drive_supported=False
+    dio = SimpleNamespace(pullInfo=lambda: (_ for _ in ()).throw(RuntimeError("no pull")))
+    return SimpleNamespace(analogIn=ai, analogOut=ao, digitalIn=di, digitalIO=dio,
+                           digitalOut=SimpleNamespace(dataInfo=lambda _: 0))
 
 
 def test_open_populates_caps_from_device() -> None:
