@@ -67,6 +67,33 @@ One device per server instance. `DwfDevice` is a thin session wrapper:
 There is no on-disk session state; OS handle cleanup on process death is
 sufficient. DWF access is single-threaded.
 
+## Device profiles & configuration (`devices/profiles.py`, `devices/configs.py`)
+
+The server supports the classic Analog Discovery family. `resolve_profile(devid)`
+maps the device-type id (**2 = AD1, 3 = AD2, 10 = AD3**) to a `DeviceProfile`
+(supported instruments, fixed-supply voltages for the AD1's non-programmable
+rails, etc.); the pin inventory is then refined from the live capability query at
+open. This keeps instrument code device-agnostic.
+
+WaveForms devices expose several hardware **configurations** that partition the
+FPGA's block RAM differently — a big DigitalIn record buffer at the cost of
+smaller output buffers, and so on. On the shared-IO AD1/AD2 these are real
+tradeoffs; the independent-IO AD3 can max everything in its default config. The
+configuration is fixed at *open*, so the caller declares **intent** via a
+`device_config` strategy and `resolve_config_index` picks the concrete index from
+that device's config table — `max_digital_in` is config 7 on an AD2 but 3 on an
+AD3, and the caller shouldn't have to know that.
+
+| Strategy | Picks | Use when |
+|----------|-------|----------|
+| `default` (or omitted) | SDK default (returns `None`, doesn't force an index) | Self-stimulus tests (AWG+scope, pattern+logic). A balanced config is required — a max-*input* strategy shrinks the matching **output** buffer on shared-IO devices and starves the source. |
+| `max_digital_in` | largest DigitalIn buffer (tie-broken by AnalogIn) | High-rate logic/sniff capture, to avoid DigitalIn overflow on the small-buffer AD1/AD2 (e.g. drove a sniff `lost_samples` 4096-overflow → 0). |
+| `max_analog_in` | largest AnalogIn buffer (mirror image) | Long analog-only record. |
+
+`DWF_DEVICE_CONFIG` is a raw-index override (env), device-specific — an escape
+hatch for diagnostics, not a normal path. It bypasses strategy resolution
+entirely, so an index a device lacks will fail the open.
+
 ## Safety model (`policy.py` + `device.gate_output`)
 
 A `SafetyPolicy` is latched at `waveforms.open` and is immutable until close —

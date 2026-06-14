@@ -41,6 +41,20 @@ located via Digilent's framework, on Linux via `libdwf.so`. See the README
 [Install](../README.md#install) section for the two Digilent packages required
 and the no-login download links.
 
+### Multiple devices: selecting the right unit
+
+With more than one Analog Discovery on the bus, `waveforms.open` with no
+`device_serial` opens **enum index 0** — *not necessarily* the unit your signals
+are wired to. Pass `device_serial` (the hardware test suite reads
+`DWF_TEST_SERIAL`) to pin the DUT.
+
+Symptom of getting this wrong: capture/record tools return **cleanly-clocked but
+all-zero / empty** data (acquisition reaches `Triggered`, streams the right
+sample count with `lost=0`, but every value is ~0) — that's an *unwired, floating
+input* on the wrong device, not a hardware fault. Buffer/single-shot reads of a
+known signal confirm whether you're talking to the wired unit. (This exact trap
+cost a long debugging detour once the bench harness moved between units.)
+
 ### Linux: no `/dev/ttyACM*` / device not found
 
 Minimal and cloud kernel flavors (e.g. Ubuntu's `virtual` cloud image) omit USB
