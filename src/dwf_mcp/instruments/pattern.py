@@ -95,7 +95,8 @@ class Pattern(Instrument):
         return {"started": True, "pin": pin}
 
     def stop(self, pin: str) -> dict[str, Any]:
-        assert self.device.inventory is not None
+        self.device.validate_pin(pin)
+        assert self.device.inventory is not None  # guaranteed by validate_pin (device is open)
         bit_idx = self.device.inventory.subsystem_bit(pin, "digitalout")
         self.device.backend.pattern_stop(bit_idx=bit_idx)
         return {"stopped": True, "pin": pin}

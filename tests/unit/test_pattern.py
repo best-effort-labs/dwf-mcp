@@ -17,7 +17,7 @@ from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 def device(tmp_path: Path) -> DwfDevice:
     return DwfDevice(
         backend=FakeBackend(),
-        policy=SafetyPolicy(pattern_voltage="3.3"),
+        policy=SafetyPolicy(),
         allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
         workspace=tmp_path,
         idle_timeout_s=60,
@@ -106,6 +106,22 @@ def test_stop_does_not_release_claim(pattern: Pattern) -> None:
     pattern.configure(pin="dio0", function="Pulse", frequency_hz=1000.0, duty=0.5, idle_state="low")
     pattern.stop(pin="dio0")
     assert "dio0" in pattern.device.allocator.claimed_pins()
+
+
+def test_stop_closed_device_raises_value_error(tmp_path: Path) -> None:
+    # stop() must raise ValueError (via validate_pin), not an opaque AssertionError,
+    # when the device is not open (inventory is None).
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    # Do NOT call device.open() — inventory stays None.
+    p = Pattern(device=device, artifacts=ArtifactWriter(workspace=tmp_path))
+    with pytest.raises(ValueError):
+        p.stop(pin="dio0")
 
 
 def test_release_clears_all_claims(pattern: Pattern) -> None:

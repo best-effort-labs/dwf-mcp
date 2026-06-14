@@ -40,11 +40,6 @@ def test_awg_amplitude_cap_enforced() -> None:
         p.check_awg_amplitude(3.31)
 
 
-def test_pattern_voltage_setting_exposed() -> None:
-    p = SafetyPolicy(pattern_voltage="1.8")
-    assert p.pattern_voltage == "1.8"
-
-
 def test_policy_is_frozen() -> None:
     p = SafetyPolicy(supply_max_voltage_pos=3.3)
     with pytest.raises((AttributeError, TypeError)):

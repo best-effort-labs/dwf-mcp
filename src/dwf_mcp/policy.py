@@ -13,7 +13,6 @@ class SafetyPolicy:
     supply_max_voltage_neg: float = -3.3
     supply_max_current: float = 0.5
     awg_max_amplitude: float = 3.3
-    pattern_voltage: str = "3.3"
     require_explicit_enable: bool = True
 
     def check_supply_voltage(self, channel: str, voltage: float) -> None:

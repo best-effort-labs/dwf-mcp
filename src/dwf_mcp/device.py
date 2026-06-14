@@ -284,7 +284,6 @@ class DwfDevice:
                 "supply_max_voltage_neg": self.policy.supply_max_voltage_neg,
                 "supply_max_current": self.policy.supply_max_current,
                 "awg_max_amplitude": self.policy.awg_max_amplitude,
-                "pattern_voltage": self.policy.pattern_voltage,
                 "require_explicit_enable": self.policy.require_explicit_enable,
             },
         }

@@ -256,7 +256,7 @@ class DwfMcpApp:
         policy_fields = {
             f: kwargs.pop(f) for f in [
                 "supply_max_voltage_pos", "supply_max_voltage_neg", "supply_max_current",
-                "awg_max_amplitude", "pattern_voltage", "require_explicit_enable",
+                "awg_max_amplitude", "require_explicit_enable",
             ] if f in kwargs
         }
         if policy_fields:
