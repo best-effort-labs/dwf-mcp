@@ -279,19 +279,19 @@ class FakeBackend(DwfBackend):
     # --- Pattern (DigitalOut) ---
 
     def pattern_configure(
-        self, pin_idx: int, function: str, freq_hz: float,
+        self, bit_idx: int, function: str, freq_hz: float,
         duty: float, idle_state: str,
     ) -> None:
         self.pattern_calls.append(("configure", {
-            "pin_idx": pin_idx, "function": function, "freq_hz": freq_hz,
+            "bit_idx": bit_idx, "function": function, "freq_hz": freq_hz,
             "duty": duty, "idle_state": idle_state,
         }))
 
-    def pattern_start(self, pin_idx: int) -> None:
-        self.pattern_calls.append(("start", {"pin_idx": pin_idx}))
+    def pattern_start(self, bit_idx: int) -> None:
+        self.pattern_calls.append(("start", {"bit_idx": bit_idx}))
 
-    def pattern_stop(self, pin_idx: int) -> None:
-        self.pattern_calls.append(("stop", {"pin_idx": pin_idx}))
+    def pattern_stop(self, bit_idx: int) -> None:
+        self.pattern_calls.append(("stop", {"bit_idx": bit_idx}))
 
     # --- DIO (DigitalIO) ---
 

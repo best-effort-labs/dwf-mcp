@@ -515,7 +515,7 @@ class PydwfBackend(DwfBackend):
         return self._device.digitalOut
 
     def pattern_configure(
-        self, pin_idx: int, function: str, freq_hz: float,
+        self, bit_idx: int, function: str, freq_hz: float,
         duty: float, idle_state: str,
     ) -> None:
         from pydwf import (  # type: ignore[import-untyped]
@@ -538,18 +538,18 @@ class PydwfBackend(DwfBackend):
         period = max(1, round(clock / freq_hz))
         high_count = max(1, round(period * duty))
         low_count = max(1, period - high_count)
-        dout.enableSet(pin_idx, True)
-        dout.typeSet(pin_idx, type_map[function])
-        dout.dividerSet(pin_idx, 1)
-        dout.counterSet(pin_idx, low_count, high_count)
-        dout.idleSet(pin_idx, idle_map[idle_state])
+        dout.enableSet(bit_idx, True)
+        dout.typeSet(bit_idx, type_map[function])
+        dout.dividerSet(bit_idx, 1)
+        dout.counterSet(bit_idx, low_count, high_count)
+        dout.idleSet(bit_idx, idle_map[idle_state])
 
-    def pattern_start(self, pin_idx: int) -> None:
+    def pattern_start(self, bit_idx: int) -> None:
         self._digital_out.configure(True)
 
-    def pattern_stop(self, pin_idx: int) -> None:
+    def pattern_stop(self, bit_idx: int) -> None:
         # configure(False) stops the global DigitalOut engine — all other running pins halt too.
-        self._digital_out.enableSet(pin_idx, False)
+        self._digital_out.enableSet(bit_idx, False)
         self._digital_out.configure(False)
 
     # --- DIO (DigitalIO) ----------------------------------------------------

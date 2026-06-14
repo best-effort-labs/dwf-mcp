@@ -17,7 +17,7 @@ PATTERN_CONFIGURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pin", "function", "frequency_hz", "duty", "idle_state"],
     "properties": {
-        "pin": {"type": "string", "pattern": "^dio\\d+$"},
+        "pin": {"type": "string", "pattern": "^(din|dio)\\d+$"},
         "function": {"type": "string", "enum": sorted(_VALID_FUNCTIONS)},
         "frequency_hz": {"type": "number", "minimum": 0.0},
         "duty": {"type": "number", "minimum": 0.0, "maximum": 1.0},
@@ -28,12 +28,8 @@ PATTERN_CONFIGURE_SCHEMA: dict[str, Any] = {
 PATTERN_PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pin"],
-    "properties": {"pin": {"type": "string", "pattern": "^dio\\d+$"}},
+    "properties": {"pin": {"type": "string", "pattern": "^(din|dio)\\d+$"}},
 }
-
-
-def _pin_idx(pin: str) -> int:
-    return int(pin[3:])
 
 
 class Pattern(Instrument):
@@ -57,17 +53,20 @@ class Pattern(Instrument):
         duty: float,
         idle_state: str,
     ) -> dict[str, Any]:
+        self.device.validate_output_pin(pin)
         if function not in _VALID_FUNCTIONS:
             raise ValueError(f"function must be one of {sorted(_VALID_FUNCTIONS)}, got {function!r}")
         if idle_state not in _VALID_IDLE:
             raise ValueError(f"idle_state must be one of {sorted(_VALID_IDLE)}, got {idle_state!r}")
+        assert self.device.inventory is not None  # guaranteed by validate_output_pin
+        bit_idx = self.device.inventory.subsystem_bit(pin, "digitalout")
         prior_pins = _Set(self._configured_pins)
         new_pins = sorted(prior_pins | {pin})
         self.device.allocator.claim("pattern", new_pins)
         self._configured_pins.discard(pin)
         try:
             self.device.backend.pattern_configure(
-                pin_idx=_pin_idx(pin),
+                bit_idx=bit_idx,
                 function=function,
                 freq_hz=frequency_hz,
                 duty=duty,
@@ -89,17 +88,23 @@ class Pattern(Instrument):
             raise InstrumentNotConfigured(
                 f"pattern.configure must be called for {pin!r} before start"
             )
-        self.device.gate_output("pattern_start", pin=pin, voltage=self.device.policy.pattern_voltage)
-        self.device.backend.pattern_start(pin_idx=_pin_idx(pin))
+        self.device.gate_output("pattern_start", pin=pin, voltage=self.device.current_dio_voltage)
+        assert self.device.inventory is not None  # guaranteed by validate_pin (device is open)
+        bit_idx = self.device.inventory.subsystem_bit(pin, "digitalout")
+        self.device.backend.pattern_start(bit_idx=bit_idx)
         return {"started": True, "pin": pin}
 
     def stop(self, pin: str) -> dict[str, Any]:
-        self.device.backend.pattern_stop(pin_idx=_pin_idx(pin))
+        assert self.device.inventory is not None
+        bit_idx = self.device.inventory.subsystem_bit(pin, "digitalout")
+        self.device.backend.pattern_stop(bit_idx=bit_idx)
         return {"stopped": True, "pin": pin}
 
     def release(self) -> None:
         for pin in list(self._configured_pins):
             with contextlib.suppress(Exception):
-                self.device.backend.pattern_stop(pin_idx=_pin_idx(pin))
+                assert self.device.inventory is not None
+                bit_idx = self.device.inventory.subsystem_bit(pin, "digitalout")
+                self.device.backend.pattern_stop(bit_idx=bit_idx)
         self.device.allocator.release("pattern")
         self._configured_pins.clear()

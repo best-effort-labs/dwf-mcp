@@ -157,15 +157,15 @@ class DwfBackend(ABC):
 
     # Pattern (DigitalOut) — added in stage 3a.
     def pattern_configure(
-        self, pin_idx: int, function: str, freq_hz: float,
+        self, bit_idx: int, function: str, freq_hz: float,
         duty: float, idle_state: str,
     ) -> None:
         raise NotImplementedError
 
-    def pattern_start(self, pin_idx: int) -> None:
+    def pattern_start(self, bit_idx: int) -> None:
         raise NotImplementedError
 
-    def pattern_stop(self, pin_idx: int) -> None:
+    def pattern_stop(self, bit_idx: int) -> None:
         raise NotImplementedError
 
     # DIO (DigitalIO) — added in stage 3a.
