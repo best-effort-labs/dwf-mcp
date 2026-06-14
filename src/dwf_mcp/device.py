@@ -228,11 +228,9 @@ class DwfDevice:
                     f"awg_start requires numeric amplitude, got {type(amplitude).__name__}"
                 )
             self.policy.check_awg_amplitude(float(amplitude))
-        elif kind == "pattern_start":
-            self.policy.check_pattern_voltage()
-        elif kind == "dio_set":
-            # DIO output is the same fixed-3.3 V hardware as the pattern generator.
-            self.policy.check_pattern_voltage()
+        elif kind in ("pattern_start", "dio_set", "dio_voltage"):
+            v = params.get("voltage", self.current_dio_voltage)
+            self.policy.check_dio_voltage(float(v))
         # Unknown kinds pass through (forward-compat for stage 3 kinds).
 
     def _append_safety_log(

@@ -584,6 +584,23 @@ class PydwfBackend(DwfBackend):
         input_mask = int(dio.inputStatus())
         return bool(input_mask & (1 << bit_idx))
 
+    def dio_set_voltage(self, volts: float) -> None:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        ch, node = self._find_analog_io_node("Digital Voltage", "Voltage")
+        self._device.analogIO.channelNodeSet(ch, node, volts)
+
+    def _find_analog_io_node(self, channel_label: str, node_label: str) -> tuple[int, int]:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        aio = self._device.analogIO
+        for c in range(aio.channelCount()):
+            if aio.channelName(c)[0] == channel_label:
+                for n in range(aio.channelInfo(c)):
+                    if aio.channelNodeName(c, n)[0] == node_label:
+                        return c, n
+        raise DwfBackendError(f"analogIO node {channel_label}/{node_label} not found")
+
     # --- Logic buffer-mode (DigitalIn) --------------------------------------
 
     @property

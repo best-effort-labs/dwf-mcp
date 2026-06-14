@@ -33,6 +33,12 @@ DIO_PIN_SCHEMA: dict[str, Any] = {
     "properties": {"pin": {"type": "string", "pattern": "^(din|dio)\\d+$"}},
 }
 
+DIO_VOLTAGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["voltage"],
+    "properties": {"voltage": {"type": "number"}},
+}
+
 
 class DIO(Instrument):
     name = "dio"
@@ -40,6 +46,7 @@ class DIO(Instrument):
         "set_direction": ("set_direction", DIO_DIRECTION_SCHEMA),
         "set":           ("set",           DIO_SET_SCHEMA),
         "read":          ("read",          DIO_PIN_SCHEMA),
+        "set_voltage":   ("set_voltage",   DIO_VOLTAGE_SCHEMA),
     }
 
     def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
@@ -91,6 +98,21 @@ class DIO(Instrument):
         finally:
             self.device.allocator.release("dio")
         return {"pin": pin, "state": int(value), "direction": direction}
+
+    def set_voltage(self, voltage: float) -> dict[str, Any]:
+        prof = self.device.profile
+        rng = prof.dio_voltage_range if prof else None
+        if rng is None:
+            raise ValueError(
+                f"DIO voltage is fixed (not adjustable) on {self.device._device_name()}"
+            )
+        lo, hi = rng
+        if not (lo <= voltage <= hi):
+            raise ValueError(f"voltage {voltage} V outside {lo}..{hi} V range")
+        self.device.gate_output("dio_voltage", voltage=float(voltage))
+        self.device.backend.dio_set_voltage(float(voltage))
+        self.device.current_dio_voltage = float(voltage)
+        return {"voltage": voltage}
 
     def release(self) -> None:
         self.device.allocator.release("dio")

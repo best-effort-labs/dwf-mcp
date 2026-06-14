@@ -78,11 +78,11 @@ def test_set_records_safety_log_entry(dio: DIO) -> None:
 
 
 def test_set_rejected_when_policy_voltage_unsatisfiable(tmp_path: Path) -> None:
-    """DIO output is fixed 3.3 V hardware, same as the pattern generator. A policy
-    whose voltage can't be met by hardware must reject dio.set, just like pattern."""
+    """DIO output is 3.3 V on AD3 hardware. A policy whose voltage cap is below
+    the device's operating voltage must reject dio.set."""
     device = DwfDevice(
         backend=FakeBackend(),
-        policy=SafetyPolicy(pattern_voltage="5.0"),
+        policy=SafetyPolicy(supply_max_voltage_pos=1.8),
         allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
         workspace=tmp_path,
         idle_timeout_s=60,
