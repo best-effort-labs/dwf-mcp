@@ -73,6 +73,22 @@ USB passthrough must attach the AD3 (VID:PID `1443:7003`) directly to the guest;
 chained hubs are unreliable. USB config changes apply only on a full VM
 stop/start, not a guest-initiated reboot. Pair with `linux-modules-extra` above.
 
+## Digital Discovery
+
+- **DIN pins are input-only.** Calling `dio.set` or `pattern` on a `dinN` pin, or
+  asking `dio.set_direction(..., 'out')`, raises `SafetyViolation`. Use the
+  bidirectional `dio24..dio39` pins for outputs.
+- **DIN pull is bank-global.** `dio.set_pull("dinN", ...)` affects **all 24 DIN
+  pins** (DINPP register), not just one. This is an SDK limitation, not a
+  per-pin override.
+- **Adjustable DIO voltage.** Unlike classic Analog Discovery (fixed 3.3 V),
+  Digital Discovery supports `dio.set_voltage(1.2...3.3)` for all
+  `dio24..dio39` pins.
+- **Selecting when multiple devices are attached.** With more than one DD or a
+  mix of devices, pass `device_serial` to `waveforms.open` (the hardware test
+  suite reads `DWF_TEST_SERIAL`). For example, this lab's DD unit is serial
+  `210321AD4ECF`. See the note under [Multiple devices](#multiple-devices-selecting-the-right-unit).
+
 ## Safety policy
 
 - The `SafetyPolicy` is **latched at `waveforms.open` and immutable** for the
