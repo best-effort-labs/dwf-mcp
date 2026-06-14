@@ -76,7 +76,7 @@ stop/start, not a guest-initiated reboot. Pair with `linux-modules-extra` above.
 ## Digital Discovery
 
 - **DIN pins are input-only.** Calling `dio.set` or `pattern` on a `dinN` pin, or
-  asking `dio.set_direction(..., 'out')`, raises `SafetyViolation`. Use the
+  asking `dio.set_direction(..., 'out')`, raises `ValueError`. Use the
   bidirectional `dio24..dio39` pins for outputs.
 - **DIN pull is bank-global.** `dio.set_pull("dinN", ...)` affects **all 24 DIN
   pins** (DINPP register), not just one. This is an SDK limitation, not a
