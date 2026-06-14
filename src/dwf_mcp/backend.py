@@ -169,13 +169,13 @@ class DwfBackend(ABC):
         raise NotImplementedError
 
     # DIO (DigitalIO) — added in stage 3a.
-    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
+    def dio_set_direction(self, bit_idx: int, output: bool) -> None:
         raise NotImplementedError
 
-    def dio_set(self, pin_idx: int, state: bool) -> None:
+    def dio_set(self, bit_idx: int, state: bool) -> None:
         raise NotImplementedError
 
-    def dio_read(self, pin_idx: int) -> bool:
+    def dio_read(self, bit_idx: int) -> bool:
         raise NotImplementedError
 
     # Logic buffer-mode (DigitalIn) — added in stage 3a.

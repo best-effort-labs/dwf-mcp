@@ -560,29 +560,29 @@ class PydwfBackend(DwfBackend):
             raise DwfBackendError("device not open")
         return self._device.digitalIO
 
-    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
+    def dio_set_direction(self, bit_idx: int, output: bool) -> None:
         dio = self._digital_io
         current_mask = int(dio.outputEnableGet())
         if output:
-            new_mask = current_mask | (1 << pin_idx)
+            new_mask = current_mask | (1 << bit_idx)
         else:
-            new_mask = current_mask & ~(1 << pin_idx)
+            new_mask = current_mask & ~(1 << bit_idx)
         dio.outputEnableSet(new_mask)
 
-    def dio_set(self, pin_idx: int, state: bool) -> None:
+    def dio_set(self, bit_idx: int, state: bool) -> None:
         dio = self._digital_io
         current_out = int(dio.outputGet())
         if state:
-            new_out = current_out | (1 << pin_idx)
+            new_out = current_out | (1 << bit_idx)
         else:
-            new_out = current_out & ~(1 << pin_idx)
+            new_out = current_out & ~(1 << bit_idx)
         dio.outputSet(new_out)
 
-    def dio_read(self, pin_idx: int) -> bool:
+    def dio_read(self, bit_idx: int) -> bool:
         dio = self._digital_io
         dio.status()  # refresh input state
         input_mask = int(dio.inputStatus())
-        return bool(input_mask & (1 << pin_idx))
+        return bool(input_mask & (1 << bit_idx))
 
     # --- Logic buffer-mode (DigitalIn) --------------------------------------
 

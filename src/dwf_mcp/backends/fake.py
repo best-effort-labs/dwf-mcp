@@ -290,15 +290,15 @@ class FakeBackend(DwfBackend):
 
     # --- DIO (DigitalIO) ---
 
-    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
-        self.dio_calls.append(("set_direction", {"pin_idx": pin_idx, "output": output}))
+    def dio_set_direction(self, bit_idx: int, output: bool) -> None:
+        self.dio_calls.append(("set_direction", {"bit_idx": bit_idx, "output": output}))
 
-    def dio_set(self, pin_idx: int, state: bool) -> None:
-        self._dio_pin_values[pin_idx] = state
-        self.dio_calls.append(("set", {"pin_idx": pin_idx, "state": state}))
+    def dio_set(self, bit_idx: int, state: bool) -> None:
+        self._dio_pin_values[bit_idx] = state
+        self.dio_calls.append(("set", {"bit_idx": bit_idx, "state": state}))
 
-    def dio_read(self, pin_idx: int) -> bool:
-        return self._dio_pin_values.get(pin_idx, False)
+    def dio_read(self, bit_idx: int) -> bool:
+        return self._dio_pin_values.get(bit_idx, False)
 
     # --- Logic buffer-mode (DigitalIn) ---
 
