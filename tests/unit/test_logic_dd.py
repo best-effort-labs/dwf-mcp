@@ -93,3 +93,19 @@ def test_logic_din_pin_accepted_in_schema(dd_logic: Logic) -> None:
     cfgs = [c for c in be.logic_calls if c[0] == "configure"]
     assert len(cfgs) == 1
     assert cfgs[0][1]["pin_mask"] == (1 << 0)
+
+
+@pytest.mark.asyncio
+async def test_logic_record_over_16_channels_uses_32bit_format(dd_logic: Logic) -> None:
+    """record_start() with >16 channels (pins spanning bits 16+) must select
+    32-bit sample format in the fake backend, matching the buffer-mode path."""
+    pins = [f"din{i}" for i in range(20)]  # din0..din19 → bits 0..19; bit 19 > 15
+    be: FakeBackend = dd_logic.device.backend  # type: ignore[assignment]
+    # One poll cycle: 10 available, 0 lost, 0 remaining → record loop exits.
+    be.set_logic_record_status_sequence([(10, 0, 0)])
+    result = await dd_logic.record_start(
+        pins=pins, sample_rate_hz=1_000_000.0, duration_s=0.01
+    )
+    assert be.logic_sample_bits == 32
+    # Clean up the session.
+    await dd_logic.record_stop(record_id=result["record_id"])

@@ -368,11 +368,15 @@ class FakeBackend(DwfBackend):
 
     # --- Logic record-mode ---
 
-    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
+    def logic_record_configure(
+        self, pin_mask: int, sample_rate_hz: float, duration_s: float
+    ) -> None:
         self.logic_calls.append(("record_configure", {
             "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz, "duration_s": duration_s,
         }))
         self._logic_record_status_idx = 0
+        self.logic_pin_mask = pin_mask
+        self.logic_sample_bits = 32 if pin_mask >> 16 else 16
 
     def logic_record_arm(self) -> None:
         self.logic_calls.append(("record_arm", {}))
