@@ -590,6 +590,27 @@ class PydwfBackend(DwfBackend):
         ch, node = self._find_analog_io_node("Digital Voltage", "Voltage")
         self._device.analogIO.channelNodeSet(ch, node, volts)
 
+    # DINPP scalar: 0.0=down, 0.5=none, 1.0=up (confirmed in wired Task 0 spike)
+    _DINPP_LEVEL: dict[str, float] = {"down": 0.0, "none": 0.5, "up": 1.0}
+
+    def dio_pull_set(self, bit_idx: int, mode: str) -> None:
+        dio = self._digital_io
+        up, down = dio.pullGet()           # read-modify-write; preserve other bits (e.g. bit 16)
+        m = 1 << bit_idx
+        up &= ~m
+        down &= ~m
+        if mode == "up":
+            up |= m
+        elif mode == "down":
+            down |= m
+        dio.pullSet(up, down)
+
+    def din_pull_set(self, mode: str) -> None:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        ch, node = self._find_analog_io_node("Digital Voltage", "DINPP")
+        self._device.analogIO.channelNodeSet(ch, node, self._DINPP_LEVEL[mode])
+
     def _find_analog_io_node(self, channel_label: str, node_label: str) -> tuple[int, int]:
         if self._device is None:
             raise DwfBackendError("device not open")

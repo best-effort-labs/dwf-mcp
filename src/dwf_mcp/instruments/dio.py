@@ -39,6 +39,15 @@ DIO_VOLTAGE_SCHEMA: dict[str, Any] = {
     "properties": {"voltage": {"type": "number"}},
 }
 
+DIO_PULL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["pin", "mode"],
+    "properties": {
+        "pin": {"type": "string", "pattern": "^(din|dio)\\d+$"},
+        "mode": {"type": "string", "enum": ["up", "down", "none"]},
+    },
+}
+
 
 class DIO(Instrument):
     name = "dio"
@@ -47,6 +56,7 @@ class DIO(Instrument):
         "set":           ("set",           DIO_SET_SCHEMA),
         "read":          ("read",          DIO_PIN_SCHEMA),
         "set_voltage":   ("set_voltage",   DIO_VOLTAGE_SCHEMA),
+        "set_pull":      ("set_pull",      DIO_PULL_SCHEMA),
     }
 
     def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
@@ -113,6 +123,20 @@ class DIO(Instrument):
         self.device.backend.dio_set_voltage(float(voltage))
         self.device.current_dio_voltage = float(voltage)
         return {"voltage": voltage}
+
+    def set_pull(self, pin: str, mode: str) -> dict[str, Any]:
+        self.device.validate_pin(pin)
+        info = self.device._info
+        if not (info and info.dio_pull_supported):
+            raise ValueError(f"pull not supported on {self.device._device_name()}")
+        if pin.startswith("din"):
+            self.device.backend.din_pull_set(mode)
+            return {"pin": pin, "mode": mode, "scope": "din_bank",
+                    "note": "DIN pull is bank-global; affects all din pins"}
+        assert self.device.inventory is not None  # guaranteed by validate_pin
+        bit = self.device.inventory.subsystem_bit(pin, "digitalio")
+        self.device.backend.dio_pull_set(bit_idx=bit, mode=mode)
+        return {"pin": pin, "mode": mode, "scope": "pin"}
 
     def release(self) -> None:
         self.device.allocator.release("dio")

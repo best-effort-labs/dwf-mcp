@@ -84,6 +84,9 @@ class FakeBackend(DwfBackend):
         self.dio_calls: list[tuple[str, dict[str, Any]]] = []
         self._dio_pin_values: dict[int, bool] = {}
         self._dio_voltage: float = 3.3
+        self.pull_up_mask: int = 0
+        self.pull_down_mask: int = 0
+        self.din_pull: str = "none"
         # Logic buffer-mode state
         self.logic_calls: list[tuple[str, dict[str, Any]]] = []
         self._logic_status_sequence: list[str] = ["Done"]
@@ -303,6 +306,18 @@ class FakeBackend(DwfBackend):
 
     def dio_set_voltage(self, volts: float) -> None:
         self._dio_voltage = volts
+
+    def dio_pull_set(self, bit_idx: int, mode: str) -> None:
+        m = 1 << bit_idx
+        self.pull_up_mask &= ~m
+        self.pull_down_mask &= ~m
+        if mode == "up":
+            self.pull_up_mask |= m
+        elif mode == "down":
+            self.pull_down_mask |= m
+
+    def din_pull_set(self, mode: str) -> None:
+        self.din_pull = mode
 
     # --- Logic buffer-mode (DigitalIn) ---
 
