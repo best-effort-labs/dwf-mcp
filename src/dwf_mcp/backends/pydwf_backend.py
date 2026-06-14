@@ -611,6 +611,13 @@ class PydwfBackend(DwfBackend):
         ch, node = self._find_analog_io_node("Digital Voltage", "DINPP")
         self._device.analogIO.channelNodeSet(ch, node, self._DINPP_LEVEL[mode])
 
+    def dio_drive_set(self, bank: int, amps: float, slew: int) -> None:
+        dio = self._digital_io
+        rc = dio.lib.FDwfDigitalIODriveSet(
+            dio.hdwf, ctypes.c_int(bank), ctypes.c_double(amps), ctypes.c_int(slew))
+        if not rc:
+            raise DwfBackendError("FDwfDigitalIODriveSet failed")
+
     def _find_analog_io_node(self, channel_label: str, node_label: str) -> tuple[int, int]:
         if self._device is None:
             raise DwfBackendError("device not open")

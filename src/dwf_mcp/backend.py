@@ -187,6 +187,9 @@ class DwfBackend(ABC):
     def din_pull_set(self, mode: str) -> None:
         raise NotImplementedError
 
+    def dio_drive_set(self, bank: int, amps: float, slew: int) -> None:
+        raise NotImplementedError
+
     # Logic buffer-mode (DigitalIn) — added in stage 3a.
     def logic_configure(
         self, pin_mask: int, sample_rate_hz: float, buffer_size: int

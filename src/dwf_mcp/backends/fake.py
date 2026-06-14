@@ -87,6 +87,7 @@ class FakeBackend(DwfBackend):
         self.pull_up_mask: int = 0
         self.pull_down_mask: int = 0
         self.din_pull: str = "none"
+        self.drive: tuple[int, float, int] | None = None
         # Logic buffer-mode state
         self.logic_calls: list[tuple[str, dict[str, Any]]] = []
         self._logic_status_sequence: list[str] = ["Done"]
@@ -318,6 +319,9 @@ class FakeBackend(DwfBackend):
 
     def din_pull_set(self, mode: str) -> None:
         self.din_pull = mode
+
+    def dio_drive_set(self, bank: int, amps: float, slew: int) -> None:
+        self.drive = (bank, amps, slew)
 
     # --- Logic buffer-mode (DigitalIn) ---
 

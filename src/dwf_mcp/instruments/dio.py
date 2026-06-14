@@ -48,6 +48,16 @@ DIO_PULL_SCHEMA: dict[str, Any] = {
     },
 }
 
+DIO_DRIVE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["milliamps", "slew"],
+    "properties": {
+        "milliamps": {"type": "number"},
+        "slew": {"type": "integer", "minimum": 0},
+        "bank": {"type": "integer", "minimum": 0, "default": 0},
+    },
+}
+
 
 class DIO(Instrument):
     name = "dio"
@@ -57,6 +67,7 @@ class DIO(Instrument):
         "read":          ("read",          DIO_PIN_SCHEMA),
         "set_voltage":   ("set_voltage",   DIO_VOLTAGE_SCHEMA),
         "set_pull":      ("set_pull",      DIO_PULL_SCHEMA),
+        "set_drive":     ("set_drive",     DIO_DRIVE_SCHEMA),
     }
 
     def __init__(self, device: DwfDevice, artifacts: ArtifactWriter) -> None:
@@ -137,6 +148,20 @@ class DIO(Instrument):
         bit = self.device.inventory.subsystem_bit(pin, "digitalio")
         self.device.backend.dio_pull_set(bit_idx=bit, mode=mode)
         return {"pin": pin, "mode": mode, "scope": "pin"}
+
+    def set_drive(self, milliamps: float, slew: int, bank: int = 0) -> dict[str, Any]:
+        info = self.device._info
+        if not (info and info.dio_drive_supported):
+            raise ValueError(f"drive config not supported on {self.device._device_name()}")
+        amps = milliamps / 1000.0
+        if not (info.dio_drive_amp_min <= amps <= info.dio_drive_amp_max):
+            raise ValueError(
+                f"milliamps {milliamps} outside "
+                f"{info.dio_drive_amp_min * 1000}..{info.dio_drive_amp_max * 1000} mA range")
+        if not (0 <= slew < max(1, info.dio_drive_slew_steps)):
+            raise ValueError(f"slew {slew} outside 0..{info.dio_drive_slew_steps - 1}")
+        self.device.backend.dio_drive_set(bank=bank, amps=amps, slew=slew)
+        return {"bank": bank, "milliamps": milliamps, "slew": slew}
 
     def release(self) -> None:
         self.device.allocator.release("dio")
