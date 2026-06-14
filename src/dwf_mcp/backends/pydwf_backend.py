@@ -642,10 +642,14 @@ class PydwfBackend(DwfBackend):
     ) -> None:
         from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
         din = self._digital_in
-        divider = max(1, round(100_000_000 / sample_rate_hz))
+        clock = float(din.internalClockInfo())
+        divider = max(1, round(clock / sample_rate_hz))
         din.dividerSet(divider)
+        sample_bits = 32 if pin_mask >> 16 else 16
+        din.sampleFormatSet(sample_bits)
         din.bufferSizeSet(buffer_size)
         din.acquisitionModeSet(DwfAcquisitionMode.Single)
+        self._logic_sample_bits = sample_bits
 
     def logic_set_trigger(
         self, source: str, pin_idx: int | None, level: float | None,
@@ -676,10 +680,16 @@ class PydwfBackend(DwfBackend):
         return str(getattr(st, "name", st))
 
     def logic_read(self, count: int) -> np.ndarray:
-        raw = self._digital_in.statusData2(0, count)
-        arr = np.array(raw, dtype=np.uint16)
-        result = np.zeros((len(arr), 16), dtype=np.uint8)
-        for bit in range(16):
+        bits = getattr(self, "_logic_sample_bits", 16)
+        # statusData2(offset, count) auto-uses sampleFormatGet() when sample_format is omitted;
+        # passing sample_format explicitly avoids an extra SDK round-trip.
+        raw = self._digital_in.statusData2(0, count, sample_format=bits)
+        if bits == 32:
+            arr: np.ndarray = np.array(raw, dtype=np.uint32)
+        else:
+            arr = np.array(raw, dtype=np.uint16)
+        result = np.zeros((len(arr), bits), dtype=np.uint8)
+        for bit in range(bits):
             result[:, bit] = (arr >> bit) & 1
         return result
 
@@ -690,8 +700,12 @@ class PydwfBackend(DwfBackend):
 
         from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
         din = self._digital_in
-        divider = max(1, round(100_000_000 / sample_rate_hz))
+        clock = float(din.internalClockInfo())
+        divider = max(1, round(clock / sample_rate_hz))
         din.dividerSet(divider)
+        sample_bits = 32 if pin_mask >> 16 else 16
+        din.sampleFormatSet(sample_bits)
+        self._logic_sample_bits = sample_bits
         din.acquisitionModeSet(DwfAcquisitionMode.Record)
         # DigitalIn has no recordLengthSet; stop is controlled by deadline in logic_record_status.
         self._logic_record_deadline: float | None = time.monotonic() + duration_s
@@ -714,10 +728,14 @@ class PydwfBackend(DwfBackend):
         return int(available), int(lost), 0 if state == DwfState.Done else 1
 
     def logic_record_read(self, count: int) -> np.ndarray:
-        raw = self._digital_in.statusData2(0, count)
-        arr = np.array(raw, dtype=np.uint16)
-        result = np.zeros((len(arr), 16), dtype=np.uint8)
-        for bit in range(16):
+        bits = getattr(self, "_logic_sample_bits", 16)
+        raw = self._digital_in.statusData2(0, count, sample_format=bits)
+        if bits == 32:
+            arr: np.ndarray = np.array(raw, dtype=np.uint32)
+        else:
+            arr = np.array(raw, dtype=np.uint16)
+        result = np.zeros((len(arr), bits), dtype=np.uint8)
+        for bit in range(bits):
             result[:, bit] = (arr >> bit) & 1
         return result
 

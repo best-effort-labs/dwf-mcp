@@ -93,6 +93,8 @@ class FakeBackend(DwfBackend):
         self._logic_status_sequence: list[str] = ["Done"]
         self._logic_status_idx = 0
         self._logic_canned_data: np.ndarray = np.zeros((0, 16), dtype=np.uint8)
+        self.logic_pin_mask: int = 0
+        self.logic_sample_bits: int = 16
         # Logic record-mode state
         self._logic_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
         self._logic_record_status_idx = 0
@@ -332,6 +334,8 @@ class FakeBackend(DwfBackend):
             "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz, "buffer_size": buffer_size,
         }))
         self._logic_status_idx = 0
+        self.logic_pin_mask = pin_mask
+        self.logic_sample_bits = 32 if pin_mask >> 16 else 16
 
     def logic_set_trigger(
         self, source: str, pin_idx: int | None, level: float | None,
@@ -352,9 +356,15 @@ class FakeBackend(DwfBackend):
         return result
 
     def logic_read(self, count: int) -> np.ndarray:
+        bits = self.logic_sample_bits
         if len(self._logic_canned_data) >= count:
-            return self._logic_canned_data[:count]
-        return np.zeros((count, 16), dtype=np.uint8)
+            data = self._logic_canned_data[:count]
+            # Pad or trim columns to match the configured sample width
+            if data.shape[1] < bits:
+                pad = np.zeros((data.shape[0], bits - data.shape[1]), dtype=np.uint8)
+                return np.concatenate([data, pad], axis=1)
+            return data[:, :bits]
+        return np.zeros((count, bits), dtype=np.uint8)
 
     # --- Logic record-mode ---
 
@@ -374,9 +384,16 @@ class FakeBackend(DwfBackend):
         return result
 
     def logic_record_read(self, count: int) -> np.ndarray:
+        bits = self.logic_sample_bits
         if self._logic_record_chunks_queue:
-            return self._logic_record_chunks_queue.pop(0)
-        return self._logic_record_canned_chunk[:count]
+            chunk = self._logic_record_chunks_queue.pop(0)
+        else:
+            chunk = self._logic_record_canned_chunk[:count]
+        # Pad or trim columns to match the configured sample width
+        if chunk.shape[1] < bits:
+            pad = np.zeros((chunk.shape[0], bits - chunk.shape[1]), dtype=np.uint8)
+            return np.concatenate([chunk, pad], axis=1)
+        return chunk[:, :bits]
 
     def logic_record_stop(self) -> None:
         self.logic_calls.append(("record_stop", {}))
