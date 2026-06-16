@@ -362,7 +362,8 @@ def main() -> None:
     import base64
     import json as _json
     logging.basicConfig(level=logging.INFO)
-    from mcp.server import Server  # imported lazily
+    from mcp import types  # imported lazily
+    from mcp.server import Server
     from mcp.server.stdio import stdio_server
 
     _vcd_env = os.environ.get("DWF_ENABLE_VCD")
@@ -375,9 +376,9 @@ def main() -> None:
     server: Server = Server("dwf-mcp")
 
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def _list_tools() -> list[dict[str, Any]]:
+    async def _list_tools() -> list[types.Tool]:
         return [
-            {"name": name, "description": "", "inputSchema": app._tool_schemas[name]}  # noqa: SLF001
+            types.Tool(name=name, description="", inputSchema=app._tool_schemas[name])  # noqa: SLF001
             for name in app._tools  # noqa: SLF001
         ]
 
