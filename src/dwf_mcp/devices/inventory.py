@@ -32,6 +32,9 @@ class PinInventory:
     def is_valid_pin(self, pin: str) -> bool:
         return pin in self.all_known()
 
+    def is_valid_physical_pin(self, pin: str) -> bool:
+        return pin in set(self.all_physical_pins())
+
     def subsystem_bit(self, pin: str, subsystem: str) -> int:
         """Resolve a digital pin to its bit index for the target SDK subsystem.
 
@@ -69,7 +72,7 @@ def build_inventory(profile: DeviceProfile, info: DeviceInfo) -> PinInventory:
         dio_pins=dio_pins,
         scope_pins=[f"scope{i}" for i in range(1, info.analog_in_channels + 1)],
         awg_pins=[f"awg{i}" for i in range(1, profile.user_awg_count + 1)],
-        supply_pins=["vpos", "vneg"],
+        supply_pins=["vpos", "vneg"] if "supply" in profile.supported_instruments else [],
         trigger_pins=["trig1", "trig2"],
         virtual_resources=list(_VIRTUAL_RESOURCES),
         input_only=frozenset(input_only),
