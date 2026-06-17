@@ -28,10 +28,12 @@ def test_dd_pattern_clock_captured_by_logic(device, artifacts) -> None:
 
     pat.configure(pin="dio24", function="Clock", frequency_hz=10_000.0,
                   duty=0.5, idle_state="low")
-    pat.start(pin="dio24")
     try:
+        pat.start(pin="dio24")
+        # 1 MHz sample rate vs 10 kHz clock over 4096 samples => ~40 cycles, ~80 edges.
         logic.configure(pins=["dio25"], sample_rate_hz=1_000_000, buffer_size=4096)
         result = logic.capture()
+        assert "path" in result
         dio25 = np.load(result["path"])["dio25"]
         assert 1 in dio25 and 0 in dio25, "expected clock transitions on DIO25"
         edges = int(np.count_nonzero(np.diff(dio25.astype(int)) != 0))
