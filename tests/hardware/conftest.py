@@ -223,6 +223,31 @@ def route_connections(jumperless, connections, *, skip_prompts):
             input("  Test done — remove connections, press Enter ... ")
 
 
+# Per-device digital loopback: output pin -> input pin, with the device's GND reference.
+# Keys are devid. sig_* are pinout.py signal names; out/inp are device pin names.
+_DIGITAL_LOOPBACK = {
+    10: dict(out="dio0",  inp="dio1",  sig_out="DIO0",  sig_in="DIO1",  gnd="AD3_GND"),
+    4:  dict(out="dio24", inp="dio25", sig_out="DIO24", sig_in="DIO25", gnd="DD_GND"),
+}
+
+
+@pytest.fixture
+def digital_loopback(request, dut_caps, jumperless, pytestconfig, _require):
+    """Yield a (out_pin, in_pin) DIO pair valid for the connected DUT and wire it
+    (out<->in + DUT GND <-> Jumperless GND). Portable across devices."""
+    if request.node.get_closest_marker("jumperless") is not None:
+        raise RuntimeError("digital_loopback tests must not also use @pytest.mark.jumperless")
+    if dut_caps is None:
+        pytest.skip("no DUT available")
+    spec = _DIGITAL_LOOPBACK.get(dut_caps.devid)
+    if spec is None:
+        pytest.skip(f"no digital-loopback descriptor for devid {dut_caps.devid}")
+    conns = {"loopback": (spec["sig_out"], spec["sig_in"]), "gnd": (spec["gnd"], "GND")}
+    with route_connections(jumperless, conns,
+                           skip_prompts=pytestconfig.getoption("--skip-wiring-prompts")):
+        yield (spec["out"], spec["inp"])
+
+
 @pytest.fixture(autouse=True)
 def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config, _require):
     marker = request.node.get_closest_marker("jumperless")
