@@ -154,7 +154,8 @@ def _make_marker(connections: dict) -> MagicMock:
 def _run_wire(request, jl, cfg):
     from tests.hardware import conftest as hw
     gen_func = inspect.unwrap(hw.wire)
-    return gen_func(request, jl, cfg)
+    # _require is the 4th param (ordering dependency only; None is safe for unit tests)
+    return gen_func(request, jl, cfg, None)
 
 
 def test_wire_no_marker_skips_completely():

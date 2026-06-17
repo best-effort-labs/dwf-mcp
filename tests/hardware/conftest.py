@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 import warnings
+from dataclasses import dataclass
 
 import pytest
 
@@ -74,6 +76,29 @@ def _open_args(request: pytest.FixtureRequest) -> dict:
     return args
 
 
+@dataclass(frozen=True)
+class DutCaps:
+    devid: int
+    instruments: frozenset
+    inventory: object  # PinInventory
+
+
+def _requires_skip_reason(request: pytest.FixtureRequest, caps) -> str | None:
+    """Skip reason if the test's @requires marker isn't satisfied by the DUT, else None."""
+    marker = request.node.get_closest_marker("requires")
+    if marker is None:
+        return None
+    if caps is None:
+        return "no DUT available (probe-open failed)"
+    need_instr = set(marker.kwargs.get("instruments", ()))
+    need_pins = set(marker.kwargs.get("pins", ()))
+    missing_i = sorted(need_instr - set(caps.instruments))
+    missing_p = sorted(p for p in need_pins if not caps.inventory.is_valid_physical_pin(p))
+    if missing_i or missing_p:
+        return f"DUT lacks instrument(s) {missing_i} / pin(s) {missing_p}"
+    return None
+
+
 def _devid_skip_reason(request: pytest.FixtureRequest, dev) -> str | None:
     """Return a skip reason if the test declares a `device(devid=...)` marker that the
     opened device doesn't satisfy, else None. `dev.profile` is None for unprofiled devices."""
@@ -138,34 +163,56 @@ def artifacts(device):
     return ArtifactWriter(workspace=device.workspace)
 
 
+@pytest.fixture(scope="session")
+def dut_caps(tmp_path_factory):
+    """Probe-open the selected DUT once, cache its capabilities, close. None on failure."""
+    from dwf_mcp.allocator import PinAllocator
+    from dwf_mcp.backends.pydwf_backend import PydwfBackend
+    from dwf_mcp.device import DwfDevice
+    from dwf_mcp.policy import SafetyPolicy
+
+    dev = DwfDevice(
+        backend=PydwfBackend(),
+        policy=SafetyPolicy(supply_max_voltage_pos=5.0, supply_max_voltage_neg=-5.0,
+                            supply_max_current=1.0, awg_max_amplitude=5.0),
+        allocator=PinAllocator(),
+        workspace=tmp_path_factory.mktemp("dut_probe"), idle_timeout_s=60,
+    )
+    caps = None
+    try:
+        dev.open(serial=os.environ.get("DWF_TEST_SERIAL"))
+        if dev.inventory is not None and dev.profile is not None:
+            caps = DutCaps(dev.profile.devid, dev.profile.supported_instruments, dev.inventory)
+    except Exception:
+        caps = None
+    finally:
+        with contextlib.suppress(Exception):
+            dev.close()
+    yield caps
+
+
 @pytest.fixture(autouse=True)
-def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config):
-    marker = request.node.get_closest_marker("jumperless")
-    if marker is None:
-        yield
-        return
+def _require(request, dut_caps):
+    reason = _requires_skip_reason(request, dut_caps)
+    if reason:
+        pytest.skip(reason)
 
-    # With Jumperless wiring involved, force the device open (and its devid guard) before
-    # we program any routes, so a profile mismatch skips first. Reuses the single cached
-    # DwfDevice handle (no second open). A device-only test (no jumperless marker) still
-    # skips via the device fixture itself.
-    if request.node.get_closest_marker("device") is not None:
-        request.getfixturevalue("device")
 
-    connections: dict[str, tuple[str, str]] = marker.kwargs.get("connections", {})
-    skip = pytestconfig.getoption("--skip-wiring-prompts")
-
+@contextlib.contextmanager
+def route_connections(jumperless, connections, *, skip_prompts):
+    """Program (and on exit clear) a set of Jumperless connections. Shared by the
+    `wire` (marker-driven) and `digital_loopback` (descriptor-driven) fixtures."""
     if jumperless is not None:
         jumperless.nodes_clear()
         for n1, n2 in connections.values():
             jumperless.connect(pinout.row(n1), pinout.row(n2))
-            time.sleep(0.3)  # allow CH446Q firmware to fully program each route before the next
-        time.sleep(0.1)  # final settle
+            time.sleep(0.3)  # CH446Q programming settle per route
+        time.sleep(0.1)
         try:
             yield
         finally:
             jumperless.nodes_clear()
-    elif skip:
+    elif skip_prompts:
         yield
     else:
         for label, (n1, n2) in connections.items():
@@ -174,3 +221,20 @@ def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config
             yield
         finally:
             input("  Test done — remove connections, press Enter ... ")
+
+
+@pytest.fixture(autouse=True)
+def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config, _require):
+    marker = request.node.get_closest_marker("jumperless")
+    if marker is None:
+        yield
+        return
+
+    # Keep rc2 device-marker ordering until the @device tests are migrated/removed.
+    if request.node.get_closest_marker("device") is not None:
+        request.getfixturevalue("device")
+
+    connections = marker.kwargs.get("connections", {})
+    with route_connections(jumperless, connections,
+                           skip_prompts=pytestconfig.getoption("--skip-wiring-prompts")):
+        yield
