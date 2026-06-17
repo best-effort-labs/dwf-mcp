@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from dwf_mcp.devices.inventory import PinInventory
 from dwf_mcp.server import build_app
 from tests.hardware import pinout
 
@@ -79,8 +80,8 @@ def _open_args(request: pytest.FixtureRequest) -> dict:
 @dataclass(frozen=True)
 class DutCaps:
     devid: int
-    instruments: frozenset
-    inventory: object  # PinInventory
+    instruments: frozenset[str]
+    inventory: PinInventory
 
 
 def _requires_skip_reason(request: pytest.FixtureRequest, caps) -> str | None:
@@ -97,7 +98,6 @@ def _requires_skip_reason(request: pytest.FixtureRequest, caps) -> str | None:
     if missing_i or missing_p:
         return f"DUT lacks instrument(s) {missing_i} / pin(s) {missing_p}"
     return None
-
 
 
 @pytest.fixture
