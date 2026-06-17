@@ -33,7 +33,11 @@ import pyarrow.parquet as pq
 
 from tests.hardware.conftest import wait_for_sniff_claim
 
-pytestmark = [pytest.mark.hardware, pytest.mark.device_config("max_digital_in")]
+pytestmark = [
+    pytest.mark.hardware,
+    pytest.mark.device_config("max_digital_in"),
+    pytest.mark.requires(instruments={"sniff"}),
+]
 
 
 @pytest.fixture(scope="module")

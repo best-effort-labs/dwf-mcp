@@ -8,6 +8,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"dmm", "awg"})
 @pytest.mark.jumperless(connections={
     # AD3 scope inputs are differential — CH1_NEG must be tied to AD3_GND
     # and AD3_GND must share a reference with the Jumperless signal ground.

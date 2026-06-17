@@ -9,6 +9,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"awg", "scope"})
 @pytest.mark.jumperless(connections={"awg_to_scope": ("W1", "CH1_POS")})
 def test_awg_sine_captured_by_scope(device, artifacts) -> None:
     from dwf_mcp.instruments.awg import AWG

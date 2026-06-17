@@ -6,6 +6,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"supply"})
 def test_supply_vpos_round_trip(device, artifacts) -> None:
     """Enable vpos, read back, disable, verify the supply is released.
 

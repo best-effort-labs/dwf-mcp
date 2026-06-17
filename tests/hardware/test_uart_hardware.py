@@ -8,6 +8,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"uart"})
 @pytest.mark.jumperless(connections={"loopback": ("DIO0", "DIO1")})
 def test_uart_loopback(app) -> None:
     async def run() -> None:
