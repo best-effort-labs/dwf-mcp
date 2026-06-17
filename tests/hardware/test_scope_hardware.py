@@ -10,6 +10,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"awg", "scope"})
 @pytest.mark.jumperless(connections={"awg_to_scope": ("W1", "CH1_POS")})
 def test_scope_captures_1khz_sine_from_awg(device, artifacts) -> None:
     """Start AWG ch1 at 1 kHz sine, capture on scope ch1, assert freq estimate near 1 kHz.

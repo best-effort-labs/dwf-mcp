@@ -9,6 +9,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"i2c"})
 @pytest.mark.jumperless(connections={
     "sda_pwr": ("TOP_RAIL", "I2C_SDA_R_A"),
     "sda_sig": ("DIO0", "I2C_SDA_R_B"),

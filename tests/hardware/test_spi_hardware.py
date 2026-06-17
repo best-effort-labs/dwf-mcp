@@ -7,6 +7,7 @@ import pytest
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"spi"})
 @pytest.mark.jumperless(connections={"loopback": ("DIO1", "DIO2")})
 def test_spi_loopback_transfer(app) -> None:
     async def run() -> None:
@@ -22,6 +23,7 @@ def test_spi_loopback_transfer(app) -> None:
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"spi"})
 @pytest.mark.jumperless(connections={"loopback": ("DIO1", "DIO2")})
 def test_spi_transfer_without_cs_still_echoes(app) -> None:
     """assert_cs=False must keep the bus in MOSI/MISO mode (transfer_type 1).
@@ -40,6 +42,7 @@ def test_spi_transfer_without_cs_still_echoes(app) -> None:
 
 
 @pytest.mark.hardware
+@pytest.mark.requires(instruments={"spi"})
 @pytest.mark.jumperless(connections={"loopback": ("DIO1", "DIO2")})
 def test_spi_write_and_read_paths_execute(app) -> None:
     """write() and read() were previously broken (write crammed len*8 into

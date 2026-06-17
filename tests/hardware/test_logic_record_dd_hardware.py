@@ -37,18 +37,12 @@ def open_device(app, request):
         args["device_serial"] = serial
     result = asyncio.run(app.call_tool("waveforms.open", args))
     assert "device" in result, f"Failed to open device: {result}"
-    # Device guard: this test targets the Digital Discovery (devid 4). Skip cleanly on
-    # any other device. Done here (not via @pytest.mark.device) so the autouse `wire`
-    # fixture does not open a SECOND handle to the same physical device.
-    devid = app.device.profile.devid if app.device.profile else None
-    if devid != 4:
-        asyncio.run(app.call_tool("waveforms.close", {}))
-        pytest.skip(f"requires devid 4 (Digital Discovery), opened device is devid {devid}")
     yield
     asyncio.run(app.call_tool("waveforms.close", {}))
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires(pins={"dio24", "dio25"})
 @pytest.mark.jumperless(connections={"loopback": ("DIO24", "DIO25"), "gnd": ("DD_GND", "GND")})
 async def test_dd_logic_record_clock_signal(app, tmp_path: Path) -> None:
     """Record a 10 kHz clock from Pattern on DIO24, captured via DIO25, verify transitions."""

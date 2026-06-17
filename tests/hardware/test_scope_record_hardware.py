@@ -46,6 +46,7 @@ def open_device(app):
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires(instruments={"scope", "awg"})
 @pytest.mark.jumperless(connections={
     # AD3_GND↔Jumperless GND: required so every Jumperless-routed AD3 signal shares
     # the same ground reference as the AD3's measurement circuit.
@@ -100,6 +101,7 @@ async def test_scope_record_dc_signal(app, tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires(instruments={"scope", "awg"})
 @pytest.mark.jumperless(connections={
     # AD3_GND↔Jumperless GND: required so every Jumperless-routed AD3 signal shares
     # the same ground reference as the AD3's measurement circuit.

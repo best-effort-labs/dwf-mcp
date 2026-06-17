@@ -48,6 +48,7 @@ def open_device(app, request):
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires(pins={"dio0", "dio1"})
 @pytest.mark.jumperless(connections={"loopback": ("DIO0", "DIO1")})
 async def test_logic_record_clock_signal(app, tmp_path: Path) -> None:
     """Record a 10 kHz clock from Pattern on DIO0, captured via DIO1, and verify transitions."""
