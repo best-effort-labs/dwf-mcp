@@ -5,7 +5,8 @@ from tests.hardware.conftest import _devid_skip_reason
 
 
 class _Marker:
-    def __init__(self, **kwargs):
+    def __init__(self, *args, **kwargs):
+        self.args = args
         self.kwargs = kwargs
 
 
@@ -49,3 +50,10 @@ def test_mismatched_devid_returns_reason():
 def test_missing_profile_returns_reason():
     reason = _devid_skip_reason(_Request(_Marker(devid=4)), _Dev(None))
     assert reason is not None
+    assert "4" in reason
+
+
+def test_positional_devid_is_honored():
+    # @pytest.mark.device(4) — positional form must filter just like devid=4
+    assert _devid_skip_reason(_Request(_Marker(4)), _Dev(10)) is not None
+    assert _devid_skip_reason(_Request(_Marker(4)), _Dev(4)) is None

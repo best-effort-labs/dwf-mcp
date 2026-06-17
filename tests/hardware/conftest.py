@@ -81,6 +81,8 @@ def _devid_skip_reason(request: pytest.FixtureRequest, dev) -> str | None:
     if marker is None:
         return None
     want = marker.kwargs.get("devid")
+    if want is None and marker.args:
+        want = marker.args[0]
     if want is None:
         return None
     got = dev.profile.devid if getattr(dev, "profile", None) is not None else None
@@ -143,9 +145,10 @@ def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config
         yield
         return
 
-    # If the test declares a required device, run the device fixture first so a profile
-    # mismatch skips BEFORE any Jumperless routes are programmed. Reuses the single
-    # cached DwfDevice handle (no second open).
+    # With Jumperless wiring involved, force the device open (and its devid guard) before
+    # we program any routes, so a profile mismatch skips first. Reuses the single cached
+    # DwfDevice handle (no second open). A device-only test (no jumperless marker) still
+    # skips via the device fixture itself.
     if request.node.get_closest_marker("device") is not None:
         request.getfixturevalue("device")
 
