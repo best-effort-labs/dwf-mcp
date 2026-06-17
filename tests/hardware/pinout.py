@@ -11,6 +11,13 @@ AD3_BOT_ROW = int(os.environ.get("AD3_BOT_ROW", "31"))
 # AD3_REVERSED=1: AD3 faces INTO the breadboard (component side down) — pin order reversed.
 AD3_REVERSED = os.environ.get("AD3_REVERSED", "0") == "1"
 
+# --- Digital Discovery (left side connector, DIO24-31) ---
+N_DD_PER_SIDE = 6
+DD_LEFT_TOP_ROW = int(os.environ.get("DD_LEFT_TOP_ROW", "1"))  # row for datasheet pin 1 (top VIO)
+DD_LEFT_BOT_ROW = int(os.environ.get("DD_LEFT_BOT_ROW", "60"))  # row of bottom-row VIO
+# DD_REVERSED=1: connector plugged the other way — each row's count direction flips.
+DD_REVERSED = os.environ.get("DD_REVERSED", "0") == "1"
+
 # Offsets are DATASHEET positions (0 = pin 1 per datasheet).
 _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     # Scope inputs — top row physical positions 0,1 → datasheet offsets 14,13
@@ -48,6 +55,20 @@ _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     "DIO13":    ("bot", 2),
     "DIO14":    ("bot", 1),
     "DIO15":    ("bot", 0),
+    # Digital Discovery left side connector. Offsets = datasheet position from pin 1.
+    # dd_left_top counts UP from DD_LEFT_TOP_ROW; dd_left_bot counts DOWN from DD_LEFT_BOT_ROW.
+    "DD_VIO":   ("dd_left_top", 0),
+    "DD_GND":   ("dd_left_top", 1),
+    "DIO27":    ("dd_left_top", 2),
+    "DIO26":    ("dd_left_top", 3),
+    "DIO25":    ("dd_left_top", 4),
+    "DIO24":    ("dd_left_top", 5),
+    "DD_VIO_B": ("dd_left_bot", 0),
+    "DD_GND_B": ("dd_left_bot", 1),
+    "DIO31":    ("dd_left_bot", 2),
+    "DIO30":    ("dd_left_bot", 3),
+    "DIO29":    ("dd_left_bot", 4),
+    "DIO28":    ("dd_left_bot", 5),
     # Jumperless built-in node aliases — pass through as strings
     "GND":          "GND",
     "TOP_RAIL":     "TOP_RAIL",
@@ -87,5 +108,11 @@ def row(signal: str) -> int | str:
     if isinstance(entry, int):
         return entry
     side, offset = entry
+    if side == "dd_left_top":
+        off = (N_DD_PER_SIDE - 1 - offset) if DD_REVERSED else offset
+        return DD_LEFT_TOP_ROW + off
+    if side == "dd_left_bot":
+        off = (N_DD_PER_SIDE - 1 - offset) if DD_REVERSED else offset
+        return DD_LEFT_BOT_ROW - off
     base = AD3_TOP_ROW if side == "top" else AD3_BOT_ROW
     return base + (N_PER_SIDE - 1 - offset) if AD3_REVERSED else base + offset

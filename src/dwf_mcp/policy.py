@@ -13,7 +13,6 @@ class SafetyPolicy:
     supply_max_voltage_neg: float = -3.3
     supply_max_current: float = 0.5
     awg_max_amplitude: float = 3.3
-    pattern_voltage: str = "3.3"
     require_explicit_enable: bool = True
 
     def check_supply_voltage(self, channel: str, voltage: float) -> None:
@@ -42,15 +41,8 @@ class SafetyPolicy:
                 f"{self.awg_max_amplitude} V"
             )
 
-    def check_pattern_voltage(self) -> None:
-        try:
-            voltage = float(self.pattern_voltage)
-        except (ValueError, TypeError):
+    def check_dio_voltage(self, voltage: float) -> None:
+        if voltage > self.supply_max_voltage_pos:
             raise SafetyViolation(
-                f"policy.pattern_voltage {self.pattern_voltage!r} is not a valid number"
-            )
-        if voltage != 3.3:
-            raise SafetyViolation(
-                f"AD3 DIO is fixed at 3.3 V; policy.pattern_voltage={self.pattern_voltage!r} "
-                f"cannot be satisfied by hardware"
+                f"DIO voltage {voltage} V exceeds policy cap {self.supply_max_voltage_pos} V"
             )

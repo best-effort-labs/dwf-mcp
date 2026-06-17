@@ -9,7 +9,7 @@ import pytest
 
 from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.backend import DwfDeviceLost
-from dwf_mcp.backends.fake import FakeBackend
+from dwf_mcp.backends.fake import FakeBackend, make_dd_device
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 
@@ -325,3 +325,37 @@ def test_close_fires_on_close_hook(tmp_path) -> None:
     d.open()
     d.close()
     assert fired["n"] == 1
+
+
+# --- Digital Discovery fixtures and tests (Task 5) ---
+
+def _dd_device(tmp_path) -> DwfDevice:
+    """Open a DwfDevice backed by a fake Digital Discovery (devid=4)."""
+    d = DwfDevice(
+        backend=FakeBackend(devices=[make_dd_device()]),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    d.open(serial="DD-0001")
+    return d
+
+
+def test_validate_output_pin_rejects_input_only(tmp_path) -> None:
+    dev = _dd_device(tmp_path)
+    with pytest.raises(ValueError, match="input-only"):
+        dev.validate_output_pin("din5")
+    dev.validate_output_pin("dio24")  # ok, no raise
+
+
+def test_validate_logic_rate_uses_digital_max(tmp_path) -> None:
+    dev = _dd_device(tmp_path)
+    dev.validate_logic_rate(800_000_000.0)  # ok at max
+    with pytest.raises(ValueError, match="exceeds"):
+        dev.validate_logic_rate(900_000_000.0)
+
+
+def test_current_dio_voltage_initialized(tmp_path) -> None:
+    dev = _dd_device(tmp_path)
+    assert dev.current_dio_voltage == 3.3

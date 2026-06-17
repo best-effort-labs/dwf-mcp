@@ -6,7 +6,7 @@ import pytest
 
 from dwf_mcp.allocator import PinAllocator
 from dwf_mcp.artifacts import ArtifactWriter
-from dwf_mcp.backends.fake import FakeBackend
+from dwf_mcp.backends.fake import FakeBackend, make_dd_device
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.devices.ad3 import AD3_RESOURCE_GROUPS
 from dwf_mcp.instruments.pattern import Pattern
@@ -17,7 +17,7 @@ from dwf_mcp.policy import SafetyPolicy, SafetyViolation
 def device(tmp_path: Path) -> DwfDevice:
     return DwfDevice(
         backend=FakeBackend(),
-        policy=SafetyPolicy(pattern_voltage="3.3"),
+        policy=SafetyPolicy(),
         allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
         workspace=tmp_path,
         idle_timeout_s=60,
@@ -28,6 +28,40 @@ def device(tmp_path: Path) -> DwfDevice:
 def pattern(device: DwfDevice, tmp_path: Path) -> Pattern:
     device.open()
     return Pattern(device=device, artifacts=ArtifactWriter(workspace=tmp_path))
+
+
+# --- Digital Discovery (native pin names) ---
+
+@pytest.fixture
+def dd_device(tmp_path: Path) -> DwfDevice:
+    d = DwfDevice(
+        backend=FakeBackend(devices=[make_dd_device()]),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    d.open(serial="DD-0001")
+    return d
+
+
+@pytest.fixture
+def dd_pattern(dd_device: DwfDevice, tmp_path: Path) -> Pattern:
+    return Pattern(device=dd_device, artifacts=ArtifactWriter(workspace=tmp_path))
+
+
+def test_pattern_configures_dio_pin(dd_pattern: Pattern) -> None:
+    out = dd_pattern.configure(
+        pin="dio24", function="Pulse", frequency_hz=1000.0, duty=0.5, idle_state="low"
+    )
+    assert out["pin"] == "dio24"
+
+
+def test_pattern_rejects_input_only_din(dd_pattern: Pattern) -> None:
+    with pytest.raises(ValueError, match="input-only"):
+        dd_pattern.configure(
+            pin="din5", function="Pulse", frequency_hz=1000.0, duty=0.5, idle_state="low"
+        )
 
 
 def test_configure_claims_pin(pattern: Pattern) -> None:
@@ -43,9 +77,11 @@ def test_configure_accumulates_pins(pattern: Pattern) -> None:
 
 
 def test_start_safety_gate_wrong_voltage_raises(tmp_path: Path) -> None:
+    # A policy cap below the device's DIO rail (3.3 V) must reject pattern.start.
+    # The gate now checks current_dio_voltage (3.3 V) against supply_max_voltage_pos.
     device = DwfDevice(
         backend=FakeBackend(),
-        policy=SafetyPolicy(pattern_voltage="5.0"),  # wrong voltage for AD3
+        policy=SafetyPolicy(supply_max_voltage_pos=1.8),  # cap below DIO rail
         allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
         workspace=tmp_path,
         idle_timeout_s=60,
@@ -53,7 +89,7 @@ def test_start_safety_gate_wrong_voltage_raises(tmp_path: Path) -> None:
     device.open()
     p = Pattern(device=device, artifacts=ArtifactWriter(workspace=tmp_path))
     p.configure(pin="dio0", function="Pulse", frequency_hz=1000.0, duty=0.5, idle_state="low")
-    with pytest.raises(SafetyViolation, match="3.3"):
+    with pytest.raises(SafetyViolation, match="1.8"):
         p.start(pin="dio0")
 
 
@@ -63,13 +99,29 @@ def test_start_calls_backend_start(pattern: Pattern) -> None:
     fake: FakeBackend = pattern.device.backend  # type: ignore[assignment]
     starts = [c for c in fake.pattern_calls if c[0] == "start"]
     assert len(starts) == 1
-    assert starts[0][1]["pin_idx"] == 0
+    assert starts[0][1]["bit_idx"] == 0
 
 
 def test_stop_does_not_release_claim(pattern: Pattern) -> None:
     pattern.configure(pin="dio0", function="Pulse", frequency_hz=1000.0, duty=0.5, idle_state="low")
     pattern.stop(pin="dio0")
     assert "dio0" in pattern.device.allocator.claimed_pins()
+
+
+def test_stop_closed_device_raises_value_error(tmp_path: Path) -> None:
+    # stop() must raise ValueError (via validate_pin), not an opaque AssertionError,
+    # when the device is not open (inventory is None).
+    device = DwfDevice(
+        backend=FakeBackend(),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    # Do NOT call device.open() — inventory stays None.
+    p = Pattern(device=device, artifacts=ArtifactWriter(workspace=tmp_path))
+    with pytest.raises(ValueError):
+        p.stop(pin="dio0")
 
 
 def test_release_clears_all_claims(pattern: Pattern) -> None:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dwf-mcp"
-version = "0.2.0"
+version = "0.3.0rc2"
 description = "MCP server exposing the Digilent WaveForms SDK"
 requires-python = ">=3.11"
 dependencies = [
@@ -39,6 +39,7 @@ markers = [
     "hardware: requires a physically connected Analog Discovery (deselect with -m 'not hardware')",
     "jumperless(connections): Jumperless V5 auto-wiring for a hardware test",
     "device_config(strategy): open the DUT with a config strategy (e.g. 'max_digital_in')",
+    "device(devid): require the opened DUT to have a specific devid (4 = Digital Discovery); skip otherwise",
 ]
 
 [tool.ruff]

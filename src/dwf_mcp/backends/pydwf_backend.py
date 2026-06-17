@@ -13,6 +13,7 @@ the libdwf runtime version string as a best-effort "firmware" field.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 from collections.abc import Iterator
@@ -38,6 +39,13 @@ from dwf_mcp.devices.configs import DeviceConfig, resolve_config_index
 log = logging.getLogger(__name__)
 
 
+def _safe_int_call(fn: Any) -> int:
+    try:
+        return int(fn())
+    except Exception:
+        return 0
+
+
 class PydwfBackend(DwfBackend):
     """Backend backed by pydwf / libdwf. Requires pydwf installed (a hard dep)."""
 
@@ -51,6 +59,8 @@ class PydwfBackend(DwfBackend):
         self._spi_cs_idle_level = 1
         # Config table of the open device (populated at open, for status reporting).
         self._configs: list[DeviceConfig] = []
+        # Logic sample bits (16 or 32), set by logic_configure/logic_record_configure.
+        self._logic_sample_bits: int = 16
 
     def _query_configs(self, device_index: int) -> list[DeviceConfig]:
         ee = self._dwf.deviceEnum
@@ -133,34 +143,80 @@ class PydwfBackend(DwfBackend):
         ai = device.analogIn
         di = device.digitalIn
         devid, _hwrev = enum.deviceType(target_index)
-        # Output buffer maxima (custom-waveform / pattern capacity). Defensive: a
-        # device that can't report them leaves 0, which disables the size check.
-        try:
-            ao_buffer_max = int(device.analogOut.nodeDataInfo(0, DwfAnalogOutNode.Carrier)[1])
-        except Exception:
+        analog_in_channels = _safe_int_call(ai.channelCount)
+        has_analog_in = analog_in_channels > 0
+        if has_analog_in:
+            sample_rate_max_hz = float(ai.frequencyInfo()[1])
+            analog_in_buffer_max = int(ai.bufferSizeInfo()[1])
+            analog_out_channels = _safe_int_call(device.analogOut.count)
+            # Output buffer maximum (custom-waveform capacity). Defensive: a
+            # device that can't report it leaves 0, which disables the size check.
+            try:
+                ao_buffer_max = int(device.analogOut.nodeDataInfo(0, DwfAnalogOutNode.Carrier)[1])
+            except Exception:
+                ao_buffer_max = 0
+        else:
+            sample_rate_max_hz = 0.0
+            analog_in_buffer_max = 0
+            analog_out_channels = 0
             ao_buffer_max = 0
         try:
             do_buffer_max = int(device.digitalOut.dataInfo(0))
         except Exception:
             do_buffer_max = 0
+        digital_in_rate_max_hz = float(di.internalClockInfo())
+        digital_in_channels = int(di.bitsInfo())
+        pull_supported, drive_supported, amp_min, amp_max, amp_steps, slew_steps = \
+            self._probe_dio_caps(device)
         info = DeviceInfo(
             serial=enum.serialNumber(target_index),
             model=enum.deviceName(target_index),
             firmware=firmware,
             devid=int(devid),
-            sample_rate_max_hz=float(ai.frequencyInfo()[1]),
-            dio_count=int(di.bitsInfo()),
-            analog_in_channels=int(ai.channelCount()),
-            analog_out_channels=int(device.analogOut.count()),
-            analog_in_buffer_max=int(ai.bufferSizeInfo()[1]),
+            sample_rate_max_hz=sample_rate_max_hz,
+            dio_count=digital_in_channels,
+            analog_in_channels=analog_in_channels,
+            analog_out_channels=analog_out_channels,
+            analog_in_buffer_max=analog_in_buffer_max,
             digital_in_buffer_max=int(di.bufferSizeInfo()),
-            digital_word_width=int(di.bitsInfo()),
+            digital_word_width=digital_in_channels,
             analog_out_buffer_max=ao_buffer_max,
             digital_out_buffer_max=do_buffer_max,
+            has_analog_in=has_analog_in,
+            digital_in_rate_max_hz=digital_in_rate_max_hz,
+            digital_in_channels=digital_in_channels,
+            dio_pull_supported=pull_supported,
+            dio_drive_supported=drive_supported,
+            dio_drive_amp_min=amp_min, dio_drive_amp_max=amp_max,
+            dio_drive_amp_steps=amp_steps, dio_drive_slew_steps=slew_steps,
         )
         self._device = device
         self._info = info
         return info
+
+    def _probe_dio_caps(self, device: Any) -> tuple[bool, bool, float, float, int, int]:
+        dio = device.digitalIO
+        try:
+            pu, _pd = dio.pullInfo()
+            pull_supported = pu != 0
+        except Exception:
+            pull_supported = False
+        amp_min = amp_max = 0.0
+        amp_steps = slew_steps = 0
+        drive_supported = False
+        try:
+            lib, hdwf = dio.lib, dio.hdwf
+            a0, a1 = ctypes.c_double(), ctypes.c_double()
+            s0, s1 = ctypes.c_int(), ctypes.c_int()
+            rc = lib.FDwfDigitalIODriveInfo(hdwf, ctypes.c_int(0),
+                ctypes.byref(a0), ctypes.byref(a1), ctypes.byref(s0), ctypes.byref(s1))
+            if rc and a1.value > 0:
+                drive_supported = True
+                amp_min, amp_max = a0.value, a1.value
+                amp_steps, slew_steps = s0.value, s1.value
+        except Exception:
+            pass
+        return pull_supported, drive_supported, amp_min, amp_max, amp_steps, slew_steps
 
     def close(self) -> None:
         if self._device is not None:
@@ -461,7 +517,7 @@ class PydwfBackend(DwfBackend):
         return self._device.digitalOut
 
     def pattern_configure(
-        self, pin_idx: int, function: str, freq_hz: float,
+        self, bit_idx: int, function: str, freq_hz: float,
         duty: float, idle_state: str,
     ) -> None:
         from pydwf import (  # type: ignore[import-untyped]
@@ -484,18 +540,18 @@ class PydwfBackend(DwfBackend):
         period = max(1, round(clock / freq_hz))
         high_count = max(1, round(period * duty))
         low_count = max(1, period - high_count)
-        dout.enableSet(pin_idx, True)
-        dout.typeSet(pin_idx, type_map[function])
-        dout.dividerSet(pin_idx, 1)
-        dout.counterSet(pin_idx, low_count, high_count)
-        dout.idleSet(pin_idx, idle_map[idle_state])
+        dout.enableSet(bit_idx, True)
+        dout.typeSet(bit_idx, type_map[function])
+        dout.dividerSet(bit_idx, 1)
+        dout.counterSet(bit_idx, low_count, high_count)
+        dout.idleSet(bit_idx, idle_map[idle_state])
 
-    def pattern_start(self, pin_idx: int) -> None:
+    def pattern_start(self, bit_idx: int) -> None:
         self._digital_out.configure(True)
 
-    def pattern_stop(self, pin_idx: int) -> None:
+    def pattern_stop(self, bit_idx: int) -> None:
         # configure(False) stops the global DigitalOut engine — all other running pins halt too.
-        self._digital_out.enableSet(pin_idx, False)
+        self._digital_out.enableSet(bit_idx, False)
         self._digital_out.configure(False)
 
     # --- DIO (DigitalIO) ----------------------------------------------------
@@ -506,29 +562,74 @@ class PydwfBackend(DwfBackend):
             raise DwfBackendError("device not open")
         return self._device.digitalIO
 
-    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
+    def dio_set_direction(self, bit_idx: int, output: bool) -> None:
         dio = self._digital_io
         current_mask = int(dio.outputEnableGet())
         if output:
-            new_mask = current_mask | (1 << pin_idx)
+            new_mask = current_mask | (1 << bit_idx)
         else:
-            new_mask = current_mask & ~(1 << pin_idx)
+            new_mask = current_mask & ~(1 << bit_idx)
         dio.outputEnableSet(new_mask)
 
-    def dio_set(self, pin_idx: int, state: bool) -> None:
+    def dio_set(self, bit_idx: int, state: bool) -> None:
         dio = self._digital_io
         current_out = int(dio.outputGet())
         if state:
-            new_out = current_out | (1 << pin_idx)
+            new_out = current_out | (1 << bit_idx)
         else:
-            new_out = current_out & ~(1 << pin_idx)
+            new_out = current_out & ~(1 << bit_idx)
         dio.outputSet(new_out)
 
-    def dio_read(self, pin_idx: int) -> bool:
+    def dio_read(self, bit_idx: int) -> bool:
         dio = self._digital_io
         dio.status()  # refresh input state
         input_mask = int(dio.inputStatus())
-        return bool(input_mask & (1 << pin_idx))
+        return bool(input_mask & (1 << bit_idx))
+
+    def dio_set_voltage(self, volts: float) -> None:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        ch, node = self._find_analog_io_node("Digital Voltage", "Voltage")
+        self._device.analogIO.channelNodeSet(ch, node, volts)
+
+    # DINPP scalar: 0.0=down, 0.5=none, 1.0=up (confirmed in wired Task 0 spike)
+    _DINPP_LEVEL: dict[str, float] = {"down": 0.0, "none": 0.5, "up": 1.0}
+
+    def dio_pull_set(self, bit_idx: int, mode: str) -> None:
+        dio = self._digital_io
+        up, down = dio.pullGet()           # read-modify-write; preserve other bits (e.g. bit 16)
+        m = 1 << bit_idx
+        up &= ~m
+        down &= ~m
+        if mode == "up":
+            up |= m
+        elif mode == "down":
+            down |= m
+        dio.pullSet(up, down)
+
+    def din_pull_set(self, mode: str) -> None:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        ch, node = self._find_analog_io_node("Digital Voltage", "DINPP")
+        self._device.analogIO.channelNodeSet(ch, node, self._DINPP_LEVEL[mode])
+
+    def dio_drive_set(self, bank: int, amps: float, slew: int) -> None:
+        dio = self._digital_io
+        rc = dio.lib.FDwfDigitalIODriveSet(
+            dio.hdwf, ctypes.c_int(bank), ctypes.c_double(amps), ctypes.c_int(slew))
+        if not rc:
+            raise DwfBackendError("FDwfDigitalIODriveSet failed")
+
+    def _find_analog_io_node(self, channel_label: str, node_label: str) -> tuple[int, int]:
+        if self._device is None:
+            raise DwfBackendError("device not open")
+        aio = self._device.analogIO
+        for c in range(aio.channelCount()):
+            if aio.channelName(c)[0] == channel_label:
+                for n in range(aio.channelInfo(c)):
+                    if aio.channelNodeName(c, n)[0] == node_label:
+                        return c, n
+        raise DwfBackendError(f"analogIO node {channel_label}/{node_label} not found")
 
     # --- Logic buffer-mode (DigitalIn) --------------------------------------
 
@@ -543,10 +644,14 @@ class PydwfBackend(DwfBackend):
     ) -> None:
         from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
         din = self._digital_in
-        divider = max(1, round(100_000_000 / sample_rate_hz))
+        clock = float(din.internalClockInfo())
+        divider = max(1, round(clock / sample_rate_hz))
         din.dividerSet(divider)
+        sample_bits = 32 if pin_mask >> 16 else 16
+        din.sampleFormatSet(sample_bits)
         din.bufferSizeSet(buffer_size)
         din.acquisitionModeSet(DwfAcquisitionMode.Single)
+        self._logic_sample_bits = sample_bits
 
     def logic_set_trigger(
         self, source: str, pin_idx: int | None, level: float | None,
@@ -577,10 +682,16 @@ class PydwfBackend(DwfBackend):
         return str(getattr(st, "name", st))
 
     def logic_read(self, count: int) -> np.ndarray:
-        raw = self._digital_in.statusData2(0, count)
-        arr = np.array(raw, dtype=np.uint16)
-        result = np.zeros((len(arr), 16), dtype=np.uint8)
-        for bit in range(16):
+        bits = self._logic_sample_bits
+        # statusData2(offset, count) auto-uses sampleFormatGet() when sample_format is omitted;
+        # passing sample_format explicitly avoids an extra SDK round-trip.
+        raw = self._digital_in.statusData2(0, count, sample_format=bits)
+        if bits == 32:
+            arr: np.ndarray = np.array(raw, dtype=np.uint32)
+        else:
+            arr = np.array(raw, dtype=np.uint16)
+        result = np.zeros((len(arr), bits), dtype=np.uint8)
+        for bit in range(bits):
             result[:, bit] = (arr >> bit) & 1
         return result
 
@@ -591,8 +702,12 @@ class PydwfBackend(DwfBackend):
 
         from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
         din = self._digital_in
-        divider = max(1, round(100_000_000 / sample_rate_hz))
+        clock = float(din.internalClockInfo())
+        divider = max(1, round(clock / sample_rate_hz))
         din.dividerSet(divider)
+        sample_bits = 32 if pin_mask >> 16 else 16
+        din.sampleFormatSet(sample_bits)
+        self._logic_sample_bits = sample_bits
         din.acquisitionModeSet(DwfAcquisitionMode.Record)
         # DigitalIn has no recordLengthSet; stop is controlled by deadline in logic_record_status.
         self._logic_record_deadline: float | None = time.monotonic() + duration_s
@@ -615,10 +730,14 @@ class PydwfBackend(DwfBackend):
         return int(available), int(lost), 0 if state == DwfState.Done else 1
 
     def logic_record_read(self, count: int) -> np.ndarray:
-        raw = self._digital_in.statusData2(0, count)
-        arr = np.array(raw, dtype=np.uint16)
-        result = np.zeros((len(arr), 16), dtype=np.uint8)
-        for bit in range(16):
+        bits = self._logic_sample_bits
+        raw = self._digital_in.statusData2(0, count, sample_format=bits)
+        if bits == 32:
+            arr: np.ndarray = np.array(raw, dtype=np.uint32)
+        else:
+            arr = np.array(raw, dtype=np.uint16)
+        result = np.zeros((len(arr), bits), dtype=np.uint8)
+        for bit in range(bits):
             result[:, bit] = (arr >> bit) & 1
         return result
 

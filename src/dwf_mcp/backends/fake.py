@@ -41,6 +41,19 @@ def make_fake_device(
     )
 
 
+def make_dd_device(serial: str = "DD-0001") -> DeviceInfo:
+    return DeviceInfo(
+        serial=serial, model="Digital Discovery", firmware="fake-1.0", devid=4,
+        sample_rate_max_hz=0.0, dio_count=24, analog_in_channels=0,
+        analog_out_channels=0, has_analog_in=False,
+        digital_in_rate_max_hz=800_000_000.0, digital_in_channels=24,
+        digital_out_buffer_max=16384,
+        dio_pull_supported=True, dio_drive_supported=True,
+        dio_drive_amp_min=0.002, dio_drive_amp_max=0.016,
+        dio_drive_amp_steps=6, dio_drive_slew_steps=3,
+    )
+
+
 class FakeBackend(DwfBackend):
     def __init__(self, devices: list[DeviceInfo] | None = None) -> None:
         self._devices = devices or [_FAKE_DEVICE]
@@ -70,11 +83,18 @@ class FakeBackend(DwfBackend):
         # DIO (DigitalIO) state
         self.dio_calls: list[tuple[str, dict[str, Any]]] = []
         self._dio_pin_values: dict[int, bool] = {}
+        self._dio_voltage: float = 3.3
+        self.pull_up_mask: int = 0
+        self.pull_down_mask: int = 0
+        self.din_pull: str = "none"
+        self.drive: tuple[int, float, int] | None = None
         # Logic buffer-mode state
         self.logic_calls: list[tuple[str, dict[str, Any]]] = []
         self._logic_status_sequence: list[str] = ["Done"]
         self._logic_status_idx = 0
         self._logic_canned_data: np.ndarray = np.zeros((0, 16), dtype=np.uint8)
+        self.logic_pin_mask: int = 0
+        self.logic_sample_bits: int = 16
         # Logic record-mode state
         self._logic_record_status_sequence: list[tuple[int, int, int]] = [(10, 0, 0)]
         self._logic_record_status_idx = 0
@@ -261,31 +281,49 @@ class FakeBackend(DwfBackend):
     # --- Pattern (DigitalOut) ---
 
     def pattern_configure(
-        self, pin_idx: int, function: str, freq_hz: float,
+        self, bit_idx: int, function: str, freq_hz: float,
         duty: float, idle_state: str,
     ) -> None:
         self.pattern_calls.append(("configure", {
-            "pin_idx": pin_idx, "function": function, "freq_hz": freq_hz,
+            "bit_idx": bit_idx, "function": function, "freq_hz": freq_hz,
             "duty": duty, "idle_state": idle_state,
         }))
 
-    def pattern_start(self, pin_idx: int) -> None:
-        self.pattern_calls.append(("start", {"pin_idx": pin_idx}))
+    def pattern_start(self, bit_idx: int) -> None:
+        self.pattern_calls.append(("start", {"bit_idx": bit_idx}))
 
-    def pattern_stop(self, pin_idx: int) -> None:
-        self.pattern_calls.append(("stop", {"pin_idx": pin_idx}))
+    def pattern_stop(self, bit_idx: int) -> None:
+        self.pattern_calls.append(("stop", {"bit_idx": bit_idx}))
 
     # --- DIO (DigitalIO) ---
 
-    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
-        self.dio_calls.append(("set_direction", {"pin_idx": pin_idx, "output": output}))
+    def dio_set_direction(self, bit_idx: int, output: bool) -> None:
+        self.dio_calls.append(("set_direction", {"bit_idx": bit_idx, "output": output}))
 
-    def dio_set(self, pin_idx: int, state: bool) -> None:
-        self._dio_pin_values[pin_idx] = state
-        self.dio_calls.append(("set", {"pin_idx": pin_idx, "state": state}))
+    def dio_set(self, bit_idx: int, state: bool) -> None:
+        self._dio_pin_values[bit_idx] = state
+        self.dio_calls.append(("set", {"bit_idx": bit_idx, "state": state}))
 
-    def dio_read(self, pin_idx: int) -> bool:
-        return self._dio_pin_values.get(pin_idx, False)
+    def dio_read(self, bit_idx: int) -> bool:
+        return self._dio_pin_values.get(bit_idx, False)
+
+    def dio_set_voltage(self, volts: float) -> None:
+        self._dio_voltage = volts
+
+    def dio_pull_set(self, bit_idx: int, mode: str) -> None:
+        m = 1 << bit_idx
+        self.pull_up_mask &= ~m
+        self.pull_down_mask &= ~m
+        if mode == "up":
+            self.pull_up_mask |= m
+        elif mode == "down":
+            self.pull_down_mask |= m
+
+    def din_pull_set(self, mode: str) -> None:
+        self.din_pull = mode
+
+    def dio_drive_set(self, bank: int, amps: float, slew: int) -> None:
+        self.drive = (bank, amps, slew)
 
     # --- Logic buffer-mode (DigitalIn) ---
 
@@ -296,6 +334,8 @@ class FakeBackend(DwfBackend):
             "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz, "buffer_size": buffer_size,
         }))
         self._logic_status_idx = 0
+        self.logic_pin_mask = pin_mask
+        self.logic_sample_bits = 32 if pin_mask >> 16 else 16
 
     def logic_set_trigger(
         self, source: str, pin_idx: int | None, level: float | None,
@@ -316,17 +356,27 @@ class FakeBackend(DwfBackend):
         return result
 
     def logic_read(self, count: int) -> np.ndarray:
+        bits = self.logic_sample_bits
         if len(self._logic_canned_data) >= count:
-            return self._logic_canned_data[:count]
-        return np.zeros((count, 16), dtype=np.uint8)
+            data = self._logic_canned_data[:count]
+            # Pad or trim columns to match the configured sample width
+            if data.shape[1] < bits:
+                pad = np.zeros((data.shape[0], bits - data.shape[1]), dtype=np.uint8)
+                return np.concatenate([data, pad], axis=1)
+            return data[:, :bits]
+        return np.zeros((count, bits), dtype=np.uint8)
 
     # --- Logic record-mode ---
 
-    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
+    def logic_record_configure(
+        self, pin_mask: int, sample_rate_hz: float, duration_s: float
+    ) -> None:
         self.logic_calls.append(("record_configure", {
             "pin_mask": pin_mask, "sample_rate_hz": sample_rate_hz, "duration_s": duration_s,
         }))
         self._logic_record_status_idx = 0
+        self.logic_pin_mask = pin_mask
+        self.logic_sample_bits = 32 if pin_mask >> 16 else 16
 
     def logic_record_arm(self) -> None:
         self.logic_calls.append(("record_arm", {}))
@@ -338,9 +388,16 @@ class FakeBackend(DwfBackend):
         return result
 
     def logic_record_read(self, count: int) -> np.ndarray:
+        bits = self.logic_sample_bits
         if self._logic_record_chunks_queue:
-            return self._logic_record_chunks_queue.pop(0)
-        return self._logic_record_canned_chunk[:count]
+            chunk = self._logic_record_chunks_queue.pop(0)
+        else:
+            chunk = self._logic_record_canned_chunk[:count]
+        # Pad or trim columns to match the configured sample width
+        if chunk.shape[1] < bits:
+            pad = np.zeros((chunk.shape[0], bits - chunk.shape[1]), dtype=np.uint8)
+            return np.concatenate([chunk, pad], axis=1)
+        return chunk[:, :bits]
 
     def logic_record_stop(self) -> None:
         self.logic_calls.append(("record_stop", {}))

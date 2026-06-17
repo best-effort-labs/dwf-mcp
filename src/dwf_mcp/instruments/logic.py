@@ -30,24 +30,13 @@ _VALID_SOURCES = frozenset({"none", "detector_digital_in", "external1", "externa
 _VALID_FORMATS = frozenset({"npz", "vcd"})
 
 
-def _pins_to_mask(pins: list[str]) -> int:
-    mask = 0
-    for p in pins:
-        mask |= 1 << int(p[3:])
-    return mask
-
-
-def _pin_indices(pins: list[str]) -> list[int]:
-    return [int(p[3:]) for p in pins]
-
-
 LOGIC_CONFIGURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["pins", "sample_rate_hz", "buffer_size"],
     "properties": {
         "pins": {
             "type": "array",
-            "items": {"type": "string", "pattern": "^dio\\d+$"},
+            "items": {"type": "string", "pattern": "^(din|dio)\\d+$"},
             "minItems": 1,
             "uniqueItems": True,
         },
@@ -61,7 +50,7 @@ LOGIC_TRIGGER_SCHEMA: dict[str, Any] = {
     "required": ["source"],
     "properties": {
         "source": {"type": "string", "enum": sorted(_VALID_SOURCES)},
-        "pin": {"type": "string", "pattern": "^dio\\d+$"},
+        "pin": {"type": "string", "pattern": "^(din|dio)\\d+$"},
         "level": {"type": "number"},
         "condition": {"type": "string", "enum": ["Rising", "Falling", "Either"]},
         "position_s": {"type": "number", "default": 0.0},
@@ -83,7 +72,7 @@ LOGIC_RECORD_START_SCHEMA: dict[str, Any] = {
     "properties": {
         "pins": {
             "type": "array",
-            "items": {"type": "string", "pattern": "^dio\\d+$"},
+            "items": {"type": "string", "pattern": "^(din|dio)\\d+$"},
             "minItems": 1,
             "uniqueItems": True,
         },
@@ -118,6 +107,25 @@ class Logic(Instrument):
         self._config: dict[str, Any] | None = None
         self._sessions: dict[str, RecordingSession] = {}
 
+    def _mask(self, pins: list[str]) -> int:
+        """Resolve pins to a DigitalIn global-bit mask, raising for bits >= 32."""
+        assert self.device.inventory is not None
+        m = 0
+        for p in pins:
+            bit = self.device.inventory.subsystem_bit(p, "digitalin")
+            if bit >= 32:
+                raise ValueError(
+                    "logic capture of pins above bit 31 (dio32..dio39) is not yet "
+                    "supported pending hardware verification"
+                )
+            m |= 1 << bit
+        return m
+
+    def _pin_bits(self, pins: list[str]) -> list[int]:
+        """Resolve pins to their DigitalIn global bit positions."""
+        assert self.device.inventory is not None
+        return [self.device.inventory.subsystem_bit(p, "digitalin") for p in pins]
+
     # --- Buffer-mode ---
 
     def configure(
@@ -128,12 +136,13 @@ class Logic(Instrument):
     ) -> dict[str, Any]:
         for pin in pins:
             self.device.validate_pin(pin)
-        self.device.validate_rate(sample_rate_hz)
+        self.device.validate_logic_rate(sample_rate_hz)
+        pin_mask = self._mask(pins)
         self.device.allocator.claim("logic", ["digital_in"] + pins)
         self._config = None
         try:
             self.device.backend.logic_configure(
-                pin_mask=_pins_to_mask(pins),
+                pin_mask=pin_mask,
                 sample_rate_hz=sample_rate_hz,
                 buffer_size=buffer_size,
             )
@@ -158,7 +167,11 @@ class Logic(Instrument):
     ) -> dict[str, Any]:
         if self._config is None:
             raise InstrumentNotConfigured("logic.configure must be called before set_trigger")
-        pin_idx = int(pin[3:]) if pin else None
+        if pin is not None:
+            assert self.device.inventory is not None
+            pin_idx: int | None = self.device.inventory.subsystem_bit(pin, "digitalin")
+        else:
+            pin_idx = None
         self.device.backend.logic_set_trigger(
             source=source,
             pin_idx=pin_idx,
@@ -195,7 +208,7 @@ class Logic(Instrument):
             raise RuntimeError("logic capture did not complete before deadline")
 
         raw = self.device.backend.logic_read(count=cfg["buffer_size"])
-        pin_indices = _pin_indices(cfg["pins"])
+        pin_indices = self._pin_bits(cfg["pins"])
         samples = raw[:, pin_indices].astype(np.uint8)
 
         return self._write_artifact(
@@ -260,7 +273,8 @@ class Logic(Instrument):
             )
         for pin in pins:
             self.device.validate_pin(pin)
-        self.device.validate_rate(sample_rate_hz)
+        self.device.validate_logic_rate(sample_rate_hz)
+        pin_mask = self._mask(pins)
         # The DigitalIn engine is singular: a second record while a prior session is
         # still open would re-arm the same hardware under the first session's running
         # poll task. Require the previous session be stopped first (mirrors Scope).
@@ -285,7 +299,7 @@ class Logic(Instrument):
                 vcd_w = vcd_writer.VcdStreamWriter(resolved_path, pins, sample_rate_hz)
                 vcd_path = str(resolved_path)
             self.device.backend.logic_record_configure(
-                pin_mask=_pins_to_mask(pins),
+                pin_mask=pin_mask,
                 sample_rate_hz=sample_rate_hz,
                 duration_s=duration_s,
             )
@@ -304,10 +318,10 @@ class Logic(Instrument):
 
         on_chunk_sync_fn: Callable[[np.ndarray], None] | None = None
         if vcd_w is not None:
-            pin_idx = _pin_indices(pins)
+            pin_bits = self._pin_bits(pins)
             _vcd_w = vcd_w
             def on_chunk_sync_fn(raw_chunk: np.ndarray) -> None:  # noqa: E306
-                sliced = raw_chunk[:, pin_idx].astype(np.uint8)
+                sliced = raw_chunk[:, pin_bits].astype(np.uint8)
                 _vcd_w.write_chunk(sliced)
 
         session = RecordingSession(
@@ -425,7 +439,7 @@ class Logic(Instrument):
             elif session.chunks:
                 try:
                     pins = session.meta["pins"]
-                    pin_indices = _pin_indices(pins)
+                    pin_indices = self._pin_bits(pins)
                     all_raw = np.concatenate(session.chunks, axis=0)
                     samples = all_raw[:, pin_indices].astype(np.uint8)
                     result_dict = self._write_artifact(

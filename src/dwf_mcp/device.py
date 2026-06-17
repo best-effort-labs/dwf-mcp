@@ -52,6 +52,7 @@ class DwfDevice:
         self.profile: DeviceProfile | None = None
         self.inventory: PinInventory | None = None
         self.on_close: Callable[[], None] | None = None
+        self.current_dio_voltage: float = 3.3
 
     @property
     def is_open(self) -> bool:
@@ -85,6 +86,9 @@ class DwfDevice:
                 self.backend.close()
             raise
         self._info = info
+        if self.profile is not None and self.profile.dio_voltage_range is not None:
+            lo, hi = self.profile.dio_voltage_range
+            self.current_dio_voltage = hi  # DD powers up at its max rail
         self._serial_request = serial
         self._config_request = device_config
         self.mark_activity()
@@ -126,6 +130,23 @@ class DwfDevice:
             raise ValueError(
                 f"sample_rate_hz {rate_hz} exceeds device max "
                 f"{self._info.sample_rate_max_hz} on {self._device_name()}"
+            )
+
+    def validate_output_pin(self, pin: str) -> None:
+        self.validate_pin(pin)
+        if self.inventory is not None and pin in self.inventory.input_only:
+            raise ValueError(f"pin {pin!r} is input-only on {self._device_name()}")
+
+    def validate_input_pin(self, pin: str) -> None:
+        self.validate_pin(pin)
+
+    def validate_logic_rate(self, rate_hz: float) -> None:
+        assert self._info is not None
+        cap = self._info.digital_in_rate_max_hz
+        if cap > 0 and rate_hz > cap:
+            raise ValueError(
+                f"logic sample_rate_hz {rate_hz} exceeds digital max {cap} "
+                f"on {self._device_name()}"
             )
 
     def validate_awg_samples(self, n_samples: int) -> None:
@@ -207,11 +228,9 @@ class DwfDevice:
                     f"awg_start requires numeric amplitude, got {type(amplitude).__name__}"
                 )
             self.policy.check_awg_amplitude(float(amplitude))
-        elif kind == "pattern_start":
-            self.policy.check_pattern_voltage()
-        elif kind == "dio_set":
-            # DIO output is the same fixed-3.3 V hardware as the pattern generator.
-            self.policy.check_pattern_voltage()
+        elif kind in ("pattern_start", "dio_set", "dio_voltage"):
+            v = params.get("voltage", self.current_dio_voltage)
+            self.policy.check_dio_voltage(float(v))
         # Unknown kinds pass through (forward-compat for stage 3 kinds).
 
     def _append_safety_log(
@@ -265,7 +284,6 @@ class DwfDevice:
                 "supply_max_voltage_neg": self.policy.supply_max_voltage_neg,
                 "supply_max_current": self.policy.supply_max_current,
                 "awg_max_amplitude": self.policy.awg_max_amplitude,
-                "pattern_voltage": self.policy.pattern_voltage,
                 "require_explicit_enable": self.policy.require_explicit_enable,
             },
         }

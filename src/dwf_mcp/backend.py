@@ -31,6 +31,15 @@ class DeviceInfo:
     digital_word_width: int = 16
     analog_out_buffer_max: int = 0
     digital_out_buffer_max: int = 0
+    has_analog_in: bool = True
+    digital_in_rate_max_hz: float = 0.0
+    digital_in_channels: int = 0
+    dio_pull_supported: bool = False
+    dio_drive_supported: bool = False
+    dio_drive_amp_min: float = 0.0
+    dio_drive_amp_max: float = 0.0
+    dio_drive_amp_steps: int = 0
+    dio_drive_slew_steps: int = 0
 
 
 class DwfBackend(ABC):
@@ -148,25 +157,37 @@ class DwfBackend(ABC):
 
     # Pattern (DigitalOut) — added in stage 3a.
     def pattern_configure(
-        self, pin_idx: int, function: str, freq_hz: float,
+        self, bit_idx: int, function: str, freq_hz: float,
         duty: float, idle_state: str,
     ) -> None:
         raise NotImplementedError
 
-    def pattern_start(self, pin_idx: int) -> None:
+    def pattern_start(self, bit_idx: int) -> None:
         raise NotImplementedError
 
-    def pattern_stop(self, pin_idx: int) -> None:
+    def pattern_stop(self, bit_idx: int) -> None:
         raise NotImplementedError
 
     # DIO (DigitalIO) — added in stage 3a.
-    def dio_set_direction(self, pin_idx: int, output: bool) -> None:
+    def dio_set_direction(self, bit_idx: int, output: bool) -> None:
         raise NotImplementedError
 
-    def dio_set(self, pin_idx: int, state: bool) -> None:
+    def dio_set(self, bit_idx: int, state: bool) -> None:
         raise NotImplementedError
 
-    def dio_read(self, pin_idx: int) -> bool:
+    def dio_read(self, bit_idx: int) -> bool:
+        raise NotImplementedError
+
+    def dio_set_voltage(self, volts: float) -> None:
+        raise NotImplementedError
+
+    def dio_pull_set(self, bit_idx: int, mode: str) -> None:
+        raise NotImplementedError
+
+    def din_pull_set(self, mode: str) -> None:
+        raise NotImplementedError
+
+    def dio_drive_set(self, bank: int, amps: float, slew: int) -> None:
         raise NotImplementedError
 
     # Logic buffer-mode (DigitalIn) — added in stage 3a.

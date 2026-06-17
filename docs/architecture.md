@@ -69,11 +69,13 @@ sufficient. DWF access is single-threaded.
 
 ## Device profiles & configuration (`devices/profiles.py`, `devices/configs.py`)
 
-The server supports the classic Analog Discovery family. `resolve_profile(devid)`
-maps the device-type id (**2 = AD1, 3 = AD2, 10 = AD3**) to a `DeviceProfile`
-(supported instruments, fixed-supply voltages for the AD1's non-programmable
-rails, etc.); the pin inventory is then refined from the live capability query at
-open. This keeps instrument code device-agnostic.
+The server supports two device families. `resolve_profile(devid)` maps the
+device-type id (**2 = AD1, 3 = AD2, 10 = AD3, 4 = Digital Discovery**) to a
+`DeviceProfile` (supported instruments, pin topology, electrical properties);
+the pin inventory is then refined from the live capability query at open. This
+keeps instrument code device-agnostic.
+
+### Classic Analog Discovery (AD1/AD2/AD3)
 
 WaveForms devices expose several hardware **configurations** that partition the
 FPGA's block RAM differently — a big DigitalIn record buffer at the cost of
@@ -93,6 +95,38 @@ AD3, and the caller shouldn't have to know that.
 `DWF_DEVICE_CONFIG` is a raw-index override (env), device-specific — an escape
 hatch for diagnostics, not a normal path. It bypasses strategy resolution
 entirely, so an index a device lacks will fail the open.
+
+### Digital Discovery (devid 4)
+
+Digital Discovery is a digital-only logic analyzer. Supported instruments:
+`dio`, `logic`, `pattern` (no analog scope, AWG, or supply). Pin topology is
+dual-bank: `din0..din23` (input-only logic analyzer inputs) and
+`dio24..dio39` (bidirectional general-purpose I/O). The `PinBank` model in
+`devices/profiles.py` and `inventory.subsystem_bit(pin, subsystem)` implement
+this topology.
+
+**Subsystem-aware addressing:** DigitalIO/DigitalOut use bank-relative indexing
+(e.g., `dio24` → bit 0 in the 16-bit DIO bank), while DigitalIn (logic)
+uses the global inputOrder layout (e.g., `dio24` → bit 24, `din0` → bit 0).
+The inventory's `subsystem_bit` method routes to the right coordinate space.
+
+**Capability detection at open:** The device reports whether it has analog
+capability (`has_analog_in`, always false for DD), input-rate limits
+(`digital_in_rate_max_hz`, 800 MHz for DD), and electrical options
+(`dio_pull_supported`, `dio_drive_supported`). The analog-less open path
+skips analog subsystem initialization.
+
+**Electrical configuration:** `dio.set_voltage` (1.2–3.3 V, set via AnalogIO
+despite no analog channels) applies uniformly to all DIO pins. `dio.set_pull`
+routes per-pin DIO RMW to bank 0 (pins 24–31) and bank 1 (pins 32–39), but
+applies to DIN pins globally (DINPP register affects all 24 inputs together).
+`dio.set_drive` is raw via `FDwfDigitalIODriveSet`. These paths are generic
+across all devices (AD3, ADP2230, DD) with analog IO present.
+
+**Logic: 24-channel DigitalIn @ 800 MHz.** The sample format (16-bit vs.
+32-bit) is auto-selected: 16-bit if all captured pins are in `din0..din15` or
+`dio24..dio31`, otherwise 32-bit. Captures spanning `dio32..dio39` are not yet
+supported pending hardware verification.
 
 ## Safety model (`policy.py` + `device.gate_output`)
 

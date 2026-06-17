@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from dwf_mcp.allocator import PinAllocator, PinAllocationError
+from dwf_mcp.allocator import PinAllocationError, PinAllocator
 from dwf_mcp.artifacts import ArtifactWriter
-from dwf_mcp.backends.fake import FakeBackend
+from dwf_mcp.backends.fake import FakeBackend, make_dd_device
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.devices.ad3 import AD3_RESOURCE_GROUPS
 from dwf_mcp.instruments.dio import DIO
@@ -78,11 +78,11 @@ def test_set_records_safety_log_entry(dio: DIO) -> None:
 
 
 def test_set_rejected_when_policy_voltage_unsatisfiable(tmp_path: Path) -> None:
-    """DIO output is fixed 3.3 V hardware, same as the pattern generator. A policy
-    whose voltage can't be met by hardware must reject dio.set, just like pattern."""
+    """DIO output is 3.3 V on AD3 hardware. A policy whose voltage cap is below
+    the device's operating voltage must reject dio.set."""
     device = DwfDevice(
         backend=FakeBackend(),
-        policy=SafetyPolicy(pattern_voltage="5.0"),
+        policy=SafetyPolicy(supply_max_voltage_pos=1.8),
         allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
         workspace=tmp_path,
         idle_timeout_s=60,
@@ -110,3 +110,34 @@ def test_set_raises_pin_allocation_error_if_held(dio: DIO) -> None:
     dio.set_direction(pin="dio0", direction="out")
     with pytest.raises(PinAllocationError):
         dio.set(pin="dio0", state=1)
+
+
+# --- Digital Discovery (native pin names) ---
+
+@pytest.fixture
+def dd_device(tmp_path: Path) -> DwfDevice:
+    d = DwfDevice(
+        backend=FakeBackend(devices=[make_dd_device()]),
+        policy=SafetyPolicy(),
+        allocator=PinAllocator(),
+        workspace=tmp_path,
+        idle_timeout_s=60,
+    )
+    d.open(serial="DD-0001")
+    return d
+
+
+@pytest.fixture
+def dd_dio(dd_device: DwfDevice, tmp_path: Path) -> DIO:
+    return DIO(device=dd_device, artifacts=ArtifactWriter(workspace=tmp_path))
+
+
+def test_dio_native_pin_set_read_roundtrip(dd_dio: DIO) -> None:
+    dd_dio.set_direction("dio24", "out")
+    assert dd_dio.set("dio24", 1)["state"] == 1
+    assert dd_dio.read("dio24")["state"] == 1
+
+
+def test_dio_set_rejects_input_only_din(dd_dio: DIO) -> None:
+    with pytest.raises(ValueError, match="input-only"):
+        dd_dio.set_direction("din5", "out")

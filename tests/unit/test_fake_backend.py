@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from dwf_mcp.backend import DeviceInfo, DwfBackendError
-from dwf_mcp.backends.fake import FakeBackend
+from dwf_mcp.backends.fake import FakeBackend, make_dd_device
 
 
 def test_enumerate_finds_fake_device() -> None:
@@ -176,3 +176,22 @@ def test_i2c_write_one_used_for_scan() -> None:
     b.i2c_configure(scl_pin_idx=0, sda_pin_idx=1, rate_hz=100_000, stretch=True, timeout_s=0.1)
     assert b.i2c_write_one(address=0x50, byte=0) == 0
     assert b.i2c_write_one(address=0x77, byte=0) == 1  # not in canned -> NAK
+
+
+def test_fake_dd_device_shape() -> None:
+    be = FakeBackend(devices=[make_dd_device()])
+    info = be.open(serial="DD-0001")
+    assert info.devid == 4
+    assert info.has_analog_in is False
+    assert info.analog_in_channels == 0
+    assert info.digital_in_channels == 24
+    assert info.digital_in_rate_max_hz == 800_000_000.0
+    assert info.dio_pull_supported is True
+    assert info.dio_drive_supported is True
+
+
+def test_fake_classic_defaults_keep_analog() -> None:
+    be = FakeBackend()
+    info = be.open()
+    assert info.has_analog_in is True
+    assert info.analog_in_channels == 2

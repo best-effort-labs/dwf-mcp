@@ -22,9 +22,10 @@ def _dio(tmp_path: Path) -> DIO:
 
 def test_dio_set_rejects_pin_beyond_device(tmp_path: Path) -> None:
     dio = _dio(tmp_path)
-    dio.set_direction(pin="dio16", direction="out")  # naming ok at schema level
+    # set_direction now validates the pin against the device inventory, so it raises
+    # "not available" for a pin that is syntactically valid but beyond the device count.
     with pytest.raises(ValueError, match="not available"):
-        dio.set(pin="dio16", state=1)
+        dio.set_direction(pin="dio16", direction="out")
 
 
 def test_list_pins_reports_live_inventory(tmp_path: Path) -> None:
