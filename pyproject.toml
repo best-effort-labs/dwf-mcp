@@ -39,7 +39,6 @@ markers = [
     "hardware: requires a physically connected Analog Discovery (deselect with -m 'not hardware')",
     "jumperless(connections): Jumperless V5 auto-wiring for a hardware test",
     "device_config(strategy): open the DUT with a config strategy (e.g. 'max_digital_in')",
-    "device(devid): require the opened DUT to have a specific devid (4 = Digital Discovery); skip otherwise",
     "requires(instruments=..., pins=...): skip unless the DUT supports the instruments and has the physical pins",
 ]
 
