@@ -81,3 +81,15 @@ def test_adp2230_profile_registered() -> None:
     assert p.fixed_supply_voltages is None            # programmable supplies
     assert p.pin_banks is None                        # single bidirectional bank
     assert p.dio_voltage_range is None                # no programmable DIO rail
+
+
+def test_adp2230_profile_supports_all_registered_instruments(tmp_path) -> None:
+    """The ADP2230 supported-instrument gate must not block any instrument the
+    server actually registers. Guards against future drift (mirrors the classic
+    profile gate above)."""
+    from dwf_mcp.server import build_app
+    app = build_app(backend_name="fake", workspace=str(tmp_path))
+    registered = set(app.registry.names())
+    supported = resolve_profile(14).supported_instruments
+    missing = registered - supported
+    assert missing == set(), f"ADP2230 profile missing registered instruments: {missing}"
