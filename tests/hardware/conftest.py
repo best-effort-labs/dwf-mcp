@@ -14,6 +14,55 @@ from dwf_mcp.server import build_app
 from tests.hardware import pinout
 
 
+def _jumperless_present(config: pytest.Config) -> bool:
+    """Whether a Jumperless looks attached (harness importable + >=3 ports), cached
+    once per session. Independent of the wiring-mode flags — used to auto-skip wired
+    tests when no board is connected (so `pytest -m hardware` is safe either way)."""
+    cached = getattr(config, "_jl_present", None)
+    if cached is None:
+        try:
+            from jlv5_harness import find_ports
+            cached = len(find_ports()) >= 3
+        except Exception:
+            cached = False
+        config._jl_present = cached  # type: ignore[attr-defined]
+    return cached
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Tag every hardware test `wired` (needs physical connections) or `standalone`
+    (device-only), so the two sets can be toggled with `-m`. A test is wired iff it
+    uses Jumperless auto-wiring (@pytest.mark.jumperless) or the `digital_loopback`
+    fixture; everything else under -m hardware is standalone. Auto-applied so new
+    tests are classified without remembering to mark them."""
+    for item in items:
+        if item.get_closest_marker("hardware") is None:
+            continue
+        wired = (
+            item.get_closest_marker("jumperless") is not None
+            or "digital_loopback" in getattr(item, "fixturenames", ())
+        )
+        item.add_marker(pytest.mark.wired if wired else pytest.mark.standalone)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Auto-skip wired tests when no Jumperless is attached, so the full `-m hardware`
+    run is safe with or without one (wired set toggles on the board's presence).
+    Overrides: --jumperless-manual (wire by hand) / --skip-wiring-prompts (pre-wired)."""
+    if item.get_closest_marker("wired") is None:
+        return
+    cfg = item.config
+    if cfg.getoption("--skip-wiring-prompts") or cfg.getoption("--jumperless-manual"):
+        return
+    if not _jumperless_present(cfg):
+        pytest.skip(
+            "no Jumperless attached; wired test skipped "
+            "(--jumperless-manual to wire by hand, --skip-wiring-prompts if pre-wired)"
+        )
+
+
 def wait_for_sniff_claim(app, instrument_key: str, timeout_s: float = 1.5,
                          setup_grace_s: float = 0.05) -> None:
     """Block until `instrument_key` appears in the allocator's claimed instruments,

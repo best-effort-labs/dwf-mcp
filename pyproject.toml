@@ -40,6 +40,8 @@ markers = [
     "jumperless(connections): Jumperless V5 auto-wiring for a hardware test",
     "device_config(strategy): open the DUT with a config strategy (e.g. 'max_digital_in')",
     "requires(instruments=..., pins=...): skip unless the DUT supports the instruments and has the physical pins",
+    "wired: hardware test needing physical wiring (Jumperless auto-wire or digital_loopback); auto-applied + auto-skipped when no Jumperless is attached. Toggle with -m 'not wired'",
+    "standalone: hardware test needing only the connected device, no external wiring; auto-applied. Run with -m 'hardware and standalone'",
 ]
 
 [tool.ruff]
