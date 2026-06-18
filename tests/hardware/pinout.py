@@ -11,6 +11,11 @@ AD3_BOT_ROW = int(os.environ.get("AD3_BOT_ROW", "31"))
 # AD3_REVERSED=1: AD3 faces INTO the breadboard (component side down) — pin order reversed.
 AD3_REVERSED = os.environ.get("AD3_REVERSED", "0") == "1"
 
+# --- Analog Discovery Pro 2230 (2x16 MTE digital header; env-overridable like AD3) ---
+ADP_TOP_ROW = int(os.environ.get("ADP_TOP_ROW", "1"))
+ADP_BOT_ROW = int(os.environ.get("ADP_BOT_ROW", "31"))
+ADP_REVERSED = os.environ.get("ADP_REVERSED", "0") == "1"
+
 # --- Digital Discovery (left side connector, DIO24-31) ---
 N_DD_PER_SIDE = 6
 DD_LEFT_TOP_ROW = int(os.environ.get("DD_LEFT_TOP_ROW", "1"))  # row for datasheet pin 1 (top VIO)
@@ -69,6 +74,10 @@ _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     "DIO30":    ("dd_left_bot", 3),
     "DIO29":    ("dd_left_bot", 4),
     "DIO28":    ("dd_left_bot", 5),
+    # ADP2230 digital header — confirm offsets against the reference manual at wiring.
+    "ADP_DIO0":  ("adp_top", 0),
+    "ADP_DIO1":  ("adp_top", 1),
+    "ADP_GND":   ("adp_top", 2),
     # Jumperless built-in node aliases — pass through as strings
     "GND":          "GND",
     "TOP_RAIL":     "TOP_RAIL",
@@ -114,5 +123,9 @@ def row(signal: str) -> int | str:
     if side == "dd_left_bot":
         off = (N_DD_PER_SIDE - 1 - offset) if DD_REVERSED else offset
         return DD_LEFT_BOT_ROW - off
+    if side == "adp_top":
+        return (ADP_TOP_ROW + (N_PER_SIDE - 1 - offset)) if ADP_REVERSED else (ADP_TOP_ROW + offset)
+    if side == "adp_bot":
+        return (ADP_BOT_ROW + (N_PER_SIDE - 1 - offset)) if ADP_REVERSED else (ADP_BOT_ROW + offset)
     base = AD3_TOP_ROW if side == "top" else AD3_BOT_ROW
     return base + (N_PER_SIDE - 1 - offset) if AD3_REVERSED else base + offset

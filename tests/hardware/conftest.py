@@ -207,8 +207,9 @@ def route_connections(jumperless, connections, *, skip_prompts):
 # Per-device digital loopback: output pin -> input pin, with the device's GND reference.
 # Keys are devid. sig_* are pinout.py signal names; out/inp are device pin names.
 _DIGITAL_LOOPBACK = {
-    10: dict(out="dio0",  inp="dio1",  sig_out="DIO0",  sig_in="DIO1",  gnd="AD3_GND"),
-    4:  dict(out="dio24", inp="dio25", sig_out="DIO24", sig_in="DIO25", gnd="DD_GND"),
+    10: dict(out="dio0",  inp="dio1",  sig_out="DIO0",    sig_in="DIO1",    gnd="AD3_GND"),
+    4:  dict(out="dio24", inp="dio25", sig_out="DIO24",   sig_in="DIO25",   gnd="DD_GND"),
+    14: dict(out="dio0",  inp="dio1",  sig_out="ADP_DIO0", sig_in="ADP_DIO1", gnd="ADP_GND"),
 }
 
 
