@@ -68,3 +68,16 @@ def test_classic_profiles_have_no_pin_banks_and_no_range() -> None:
 def test_unsupported_devid_still_raises() -> None:
     with pytest.raises(UnsupportedDeviceError):
         resolve_profile(999)
+
+
+def test_adp2230_profile_registered() -> None:
+    from dwf_mcp.devices.profiles import _ALL_INSTRUMENTS
+    p = resolve_profile(14)
+    assert p.devid == 14
+    assert p.name == "Analog Discovery Pro 2230"
+    assert p.user_awg_count == 1                      # ONE AWG (W1); SDK reports 3
+    assert p.supported_instruments == _ALL_INSTRUMENTS
+    assert p.dio_voltage_options == [3.3]             # fixed 3.3 V LVCMOS
+    assert p.fixed_supply_voltages is None            # programmable supplies
+    assert p.pin_banks is None                        # single bidirectional bank
+    assert p.dio_voltage_range is None                # no programmable DIO rail

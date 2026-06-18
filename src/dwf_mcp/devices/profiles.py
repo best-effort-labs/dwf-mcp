@@ -84,6 +84,18 @@ PROFILE_REGISTRY: dict[int, DeviceProfile] = {
         dio_voltage_range=(1.2, 3.3),
         pin_banks=[PinBank("din", 0, 24, input_only=True), PinBank("dio", 24, 16)],
     ),
+    14: DeviceProfile(
+        devid=14,
+        name="Analog Discovery Pro 2230",
+        # ONE user AWG (W1, one BNC) per datasheet; the SDK reports
+        # analogOut.count()=3 but the other two channels are internal.
+        user_awg_count=1,
+        supported_instruments=_ALL_INSTRUMENTS,
+        dio_voltage_options=[3.3],    # fixed 3.3 V LVCMOS, 5 V-tolerant input
+        fixed_supply_voltages=None,   # programmable: V+ 0.5..5 V, V- -0.5..-5 V
+        pin_banks=None,               # default single bidirectional dio0..dio15 bank
+        dio_voltage_range=None,       # no programmable DIO rail
+    ),
 }
 
 
