@@ -101,7 +101,8 @@ def jumperless(pytestconfig: pytest.Config):
         j = Harness()
     except Exception as exc:
         warnings.warn(
-            f"Jumperless probe/open failed ({exc!r}), falling back to manual prompts",
+            f"Jumperless probe/open failed ({exc!r}); wired tests will skip "
+            f"(use --jumperless-manual to wire by hand, --skip-wiring-prompts if pre-wired)",
             UserWarning,
             stacklevel=2,
         )
