@@ -1,5 +1,5 @@
 """Portable hardware smoke test for DIO: out pin -> in pin high/low loopback on any
-device with a digital_loopback descriptor (AD3 dio0->dio1, DD dio24->dio25).
+device with a digital_loopback descriptor (AD3 dio0->dio1, DD dio24->dio25, ADP2230 dio0->dio1).
 
 Run: DWF_TEST_SERIAL=<serial> pytest tests/hardware/test_dio_loopback_hardware.py -m hardware -v
 """
