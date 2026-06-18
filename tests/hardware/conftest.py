@@ -29,29 +29,41 @@ def _jumperless_present(config: pytest.Config) -> bool:
     return cached
 
 
+def _uses_jumperless(item: pytest.Item) -> bool:
+    """Whether a test drives the Jumperless crossbar (auto-wiring marker or the
+    `digital_loopback` fixture). Distinct from the broader `wired` category, which
+    also covers tests needing a manual cable the Jumperless can't route (e.g. BNC)."""
+    return (
+        item.get_closest_marker("jumperless") is not None
+        or "digital_loopback" in getattr(item, "fixturenames", ())
+    )
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Tag every hardware test `wired` (needs physical connections) or `standalone`
-    (device-only), so the two sets can be toggled with `-m`. A test is wired iff it
-    uses Jumperless auto-wiring (@pytest.mark.jumperless) or the `digital_loopback`
-    fixture; everything else under -m hardware is standalone. Auto-applied so new
-    tests are classified without remembering to mark them."""
+    """Tag every hardware test `wired` (needs external physical connections) or
+    `standalone` (device-only), so the two sets can be toggled with `-m`. Jumperless
+    tests are auto-detected as wired; a test needing a manual cable can mark itself
+    `@pytest.mark.wired` and is respected here. Everything else under -m hardware is
+    standalone. Auto-applied so new tests are classified without manual marking."""
     for item in items:
         if item.get_closest_marker("hardware") is None:
             continue
-        wired = (
-            item.get_closest_marker("jumperless") is not None
-            or "digital_loopback" in getattr(item, "fixturenames", ())
-        )
-        item.add_marker(pytest.mark.wired if wired else pytest.mark.standalone)
+        # Respect an explicit classification (e.g. a manual-cable test marks itself
+        # `wired` although it doesn't drive the Jumperless).
+        if item.get_closest_marker("wired") or item.get_closest_marker("standalone"):
+            continue
+        item.add_marker(pytest.mark.wired if _uses_jumperless(item) else pytest.mark.standalone)
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Auto-skip wired tests when no Jumperless is attached, so the full `-m hardware`
-    run is safe with or without one (wired set toggles on the board's presence).
-    Overrides: --jumperless-manual (wire by hand) / --skip-wiring-prompts (pre-wired)."""
-    if item.get_closest_marker("wired") is None:
+    """Jumperless-convenience skip: tests that drive the Jumperless auto-skip when no
+    board is attached, so the full `-m hardware` run is safe with or without one.
+    Overrides: --jumperless-manual (wire by hand) / --skip-wiring-prompts (pre-wired).
+    Manual-cable wired tests aren't Jumperless tests — they self-skip via their own
+    opt-in (e.g. an env flag) rather than here."""
+    if not _uses_jumperless(item):
         return
     cfg = item.config
     if cfg.getoption("--skip-wiring-prompts") or cfg.getoption("--jumperless-manual"):
