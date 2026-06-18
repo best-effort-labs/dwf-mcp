@@ -51,3 +51,24 @@ def test_unknown_strategy_raises() -> None:
 
 def test_empty_config_table_returns_none() -> None:
     assert resolve_config_index([], "max_digital_in") is None
+
+
+def _adp2230_configs():
+    # (index, digital_in_buffer, analog_in_buffer, analog_out_buffer, digital_out_buffer)
+    rows = [
+        (0,  67_108_864,  67_108_864, 32_768, 32_768),
+        (1,  16_384,      32_768,     16_384, 16_384),
+        (2,  67_108_864,  67_108_864, 32_768, 32_768),
+        (3,  0,           67_108_864, 32_768, 32_768),
+        (4,  134_217_728, 67_108_864, 32_768, 32_768),  # max digital-in
+        (5,  0,           134_217_728, 32_768, 32_768),  # max analog-in
+    ]
+    return [DeviceConfig(i, di, ai, ao, do) for (i, di, ai, ao, do) in rows]
+
+
+def test_adp2230_config_strategy_resolution():
+    configs = _adp2230_configs()
+    assert resolve_config_index(configs, None) is None          # SDK default
+    assert resolve_config_index(configs, "default") is None
+    assert resolve_config_index(configs, "max_digital_in") == 4
+    assert resolve_config_index(configs, "max_analog_in") == 5

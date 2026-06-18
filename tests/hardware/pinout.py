@@ -11,6 +11,15 @@ AD3_BOT_ROW = int(os.environ.get("AD3_BOT_ROW", "31"))
 # AD3_REVERSED=1: AD3 faces INTO the breadboard (component side down) — pin order reversed.
 AD3_REVERSED = os.environ.get("AD3_REVERSED", "0") == "1"
 
+# --- Analog Discovery Pro 2230 (2x16 MTE digital header) ---
+# Plugged face-in on the right of the board (reversed pin order), so the rows don't
+# follow the simple base+offset model — these are the measured Jumperless rows for
+# the bench wiring (DIO0/DIO1 on the top row, GND the ↓ pin next to DIO0).
+# Override via env to relocate.
+ADP_DIO0_ROW = int(os.environ.get("ADP_DIO0_ROW", "29"))
+ADP_DIO1_ROW = int(os.environ.get("ADP_DIO1_ROW", "28"))
+ADP_GND_ROW = int(os.environ.get("ADP_GND_ROW", "30"))
+
 # --- Digital Discovery (left side connector, DIO24-31) ---
 N_DD_PER_SIDE = 6
 DD_LEFT_TOP_ROW = int(os.environ.get("DD_LEFT_TOP_ROW", "1"))  # row for datasheet pin 1 (top VIO)
@@ -69,6 +78,10 @@ _SIGNAL_MAP: dict[str, tuple[str, int] | str | int] = {
     "DIO30":    ("dd_left_bot", 3),
     "DIO29":    ("dd_left_bot", 4),
     "DIO28":    ("dd_left_bot", 5),
+    # ADP2230 digital header (2x16 MTE) — direct measured rows for the bench wiring.
+    "ADP_DIO0":  ADP_DIO0_ROW,
+    "ADP_DIO1":  ADP_DIO1_ROW,
+    "ADP_GND":   ADP_GND_ROW,
     # Jumperless built-in node aliases — pass through as strings
     "GND":          "GND",
     "TOP_RAIL":     "TOP_RAIL",

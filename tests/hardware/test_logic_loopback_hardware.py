@@ -1,6 +1,6 @@
 """Portable hardware smoke test for Logic + Pattern: runs on any device with a
-digital_loopback descriptor (AD3 dio0->dio1, DD dio24->dio25). On the DD this exercises
-the 32-bit/bit-25 sample-format path; on the AD3 the 16-bit path.
+digital_loopback descriptor (AD3 dio0->dio1, DD dio24->dio25, ADP2230 dio0->dio1).
+On the DD this exercises the 32-bit/bit-25 sample-format path; on the AD3/ADP2230 the 16-bit path.
 
 Run: DWF_TEST_SERIAL=<serial> pytest tests/hardware/test_logic_loopback_hardware.py -m hardware -v
 """

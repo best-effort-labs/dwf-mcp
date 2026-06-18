@@ -1,4 +1,6 @@
-"""AWG (AnalogOut) instrument. Two channels (W1/W2), accumulating pin claim model."""
+"""AWG (AnalogOut) instrument. Channel count is device-dependent (W1/W2 on classic
+AD, W1 only on ADP2230); validated per call via device.validate_channel. Accumulating
+pin claim model."""
 from __future__ import annotations
 
 import contextlib
