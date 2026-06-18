@@ -65,10 +65,18 @@ def test_adp2230_supply_vpos_round_trip(device, artifacts) -> None:
     try:
         supply.set(channel="vpos", voltage=1.0, current_limit=0.1)
         supply.enable(channel="vpos")
-        time.sleep(0.5)  # V+ ramp settle
-        state = supply.read(channel="vpos")
+        # Poll until V+ settles within [0.7, 1.3] V — handles residual capacitive
+        # charge from a prior high-setpoint run that makes a fixed sleep flaky.
+        _deadline = time.monotonic() + 5.0
+        state = None
+        while True:
+            state = supply.read(channel="vpos")
+            if state["enabled"] and 0.7 < state["measured"]["voltage"] < 1.3:
+                break
+            if time.monotonic() >= _deadline:
+                pytest.fail(f"V+ did not settle to [0.7, 1.3] V within 5 s; last state: {state}")
+            time.sleep(0.25)
         assert state["enabled"] is True, state
-        assert 0.7 < state["measured"]["voltage"] < 1.3, state
     finally:
         supply.disable(channel="vpos")
     state = supply.read(channel="vpos")
