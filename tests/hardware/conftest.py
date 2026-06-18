@@ -229,9 +229,15 @@ def _require(request, dut_caps):
 
 
 @contextlib.contextmanager
-def route_connections(jumperless, connections, *, skip_prompts):
+def route_connections(jumperless, connections, *, skip_prompts, manual):
     """Program (and on exit clear) a set of Jumperless connections. Shared by the
-    `wire` (marker-driven) and `digital_loopback` (descriptor-driven) fixtures."""
+    `wire` (marker-driven) and `digital_loopback` (descriptor-driven) fixtures.
+
+    When no usable Jumperless was opened: --skip-wiring-prompts proceeds (pre-wired
+    bench), --jumperless-manual prompts to wire by hand, otherwise the wired test is
+    skipped (no board attached) rather than blocking on input(). This is the
+    authoritative wired-skip — it keys off the fixture's real openability, so it also
+    catches the found-but-unopenable case the collection-time heuristic can't."""
     if jumperless is not None:
         jumperless.nodes_clear()
         for n1, n2 in connections.values():
@@ -244,13 +250,18 @@ def route_connections(jumperless, connections, *, skip_prompts):
             jumperless.nodes_clear()
     elif skip_prompts:
         yield
-    else:
+    elif manual:
         for label, (n1, n2) in connections.items():
             input(f"  [{label}]  connect {n1} → {n2}, then press Enter ... ")
         try:
             yield
         finally:
             input("  Test done — remove connections, press Enter ... ")
+    else:
+        pytest.skip(
+            "no Jumperless attached; wired test skipped "
+            "(--jumperless-manual to wire by hand, --skip-wiring-prompts if pre-wired)"
+        )
 
 
 # Per-device digital loopback: output pin -> input pin, with the device's GND reference.
@@ -277,7 +288,8 @@ def digital_loopback(request, dut_caps, jumperless, pytestconfig, _require):
         pytest.skip(f"no digital-loopback descriptor for devid {dut_caps.devid}")
     conns = {"loopback": (spec["sig_out"], spec["sig_in"]), "gnd": (spec["gnd"], "GND")}
     with route_connections(jumperless, conns,
-                           skip_prompts=pytestconfig.getoption("--skip-wiring-prompts")):
+                           skip_prompts=pytestconfig.getoption("--skip-wiring-prompts"),
+                           manual=pytestconfig.getoption("--jumperless-manual")):
         yield (spec["out"], spec["inp"])
 
 
@@ -290,5 +302,6 @@ def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config
 
     connections = marker.kwargs.get("connections", {})
     with route_connections(jumperless, connections,
-                           skip_prompts=pytestconfig.getoption("--skip-wiring-prompts")):
+                           skip_prompts=pytestconfig.getoption("--skip-wiring-prompts"),
+                           manual=pytestconfig.getoption("--jumperless-manual")):
         yield
