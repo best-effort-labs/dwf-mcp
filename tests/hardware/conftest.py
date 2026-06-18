@@ -209,7 +209,12 @@ def route_connections(jumperless, connections, *, skip_prompts):
 _DIGITAL_LOOPBACK = {
     10: dict(out="dio0",  inp="dio1",  sig_out="DIO0",    sig_in="DIO1",    gnd="AD3_GND"),
     4:  dict(out="dio24", inp="dio25", sig_out="DIO24",   sig_in="DIO25",   gnd="DD_GND"),
-    14: dict(out="dio0",  inp="dio1",  sig_out="ADP_DIO0", sig_in="ADP_DIO1", gnd="ADP_GND"),
+    # ADP2230 (devid 14): the pinout.py ADP_DIO0/ADP_DIO1/ADP_GND scaffold is ready,
+    # but the descriptor is intentionally omitted until the device is physically wired
+    # to a Jumperless — without it, the portable loopback tests cleanly SKIP ("no
+    # digital-loopback descriptor for devid 14") rather than prompt or run unwired.
+    # When wiring it, confirm the ADP_* row offsets against the 2x16 MTE header and add:
+    #   14: dict(out="dio0", inp="dio1", sig_out="ADP_DIO0", sig_in="ADP_DIO1", gnd="ADP_GND"),
 }
 
 

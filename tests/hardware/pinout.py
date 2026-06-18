@@ -12,6 +12,7 @@ AD3_BOT_ROW = int(os.environ.get("AD3_BOT_ROW", "31"))
 AD3_REVERSED = os.environ.get("AD3_REVERSED", "0") == "1"
 
 # --- Analog Discovery Pro 2230 (2x16 MTE digital header; env-overridable like AD3) ---
+N_ADP_PER_SIDE = 16  # 2x16 MTE header (vs AD3's N_PER_SIDE=15)
 ADP_TOP_ROW = int(os.environ.get("ADP_TOP_ROW", "1"))
 ADP_BOT_ROW = int(os.environ.get("ADP_BOT_ROW", "31"))
 ADP_REVERSED = os.environ.get("ADP_REVERSED", "0") == "1"
@@ -124,8 +125,8 @@ def row(signal: str) -> int | str:
         off = (N_DD_PER_SIDE - 1 - offset) if DD_REVERSED else offset
         return DD_LEFT_BOT_ROW - off
     if side == "adp_top":
-        return (ADP_TOP_ROW + (N_PER_SIDE - 1 - offset)) if ADP_REVERSED else (ADP_TOP_ROW + offset)
+        return (ADP_TOP_ROW + (N_ADP_PER_SIDE - 1 - offset)) if ADP_REVERSED else (ADP_TOP_ROW + offset)
     if side == "adp_bot":
-        return (ADP_BOT_ROW + (N_PER_SIDE - 1 - offset)) if ADP_REVERSED else (ADP_BOT_ROW + offset)
+        return (ADP_BOT_ROW + (N_ADP_PER_SIDE - 1 - offset)) if ADP_REVERSED else (ADP_BOT_ROW + offset)
     base = AD3_TOP_ROW if side == "top" else AD3_BOT_ROW
     return base + (N_PER_SIDE - 1 - offset) if AD3_REVERSED else base + offset
