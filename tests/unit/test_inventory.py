@@ -53,6 +53,31 @@ def test_dd_subsystem_bit_mapping():
     assert inv.subsystem_bit("dio24", "digitalin") == 24
 
 
+def _adp2230_info():
+    return DeviceInfo(
+        serial="ADP", model="Analog Discovery Pro 2230", firmware="x",
+        sample_rate_max_hz=100_000_000.0, dio_count=16,
+        analog_in_channels=2, analog_out_channels=3,  # raw SDK count = 3
+        devid=14,
+        dio_pull_supported=True, dio_drive_supported=True,
+        dio_drive_amp_min=0.004, dio_drive_amp_max=0.016,
+        dio_drive_amp_steps=4, dio_drive_slew_steps=2,
+    )
+
+
+def test_adp2230_inventory_single_awg_namespace():
+    inv = build_inventory(resolve_profile(14), _adp2230_info())
+    assert inv.dio_pins == [f"dio{i}" for i in range(16)]
+    assert inv.scope_pins == ["scope1", "scope2"]
+    # ONE user AWG even though raw AnalogOut count is 3
+    assert inv.awg_pins == ["awg1"]
+    assert inv.is_valid_pin("awg1") and not inv.is_valid_pin("awg2")
+    assert inv.supply_pins == ["vpos", "vneg"]
+    assert inv.input_only == frozenset()           # bidirectional bank, no input-only
+    assert inv.subsystem_bit("dio5", "digitalio") == 5
+    assert inv.subsystem_bit("dio5", "digitalin") == 5
+
+
 def test_classic_inventory_unchanged():
     info = DeviceInfo(serial="AD3", model="Analog Discovery 3", firmware="x",
                       sample_rate_max_hz=1e8, dio_count=16, analog_in_channels=2,
