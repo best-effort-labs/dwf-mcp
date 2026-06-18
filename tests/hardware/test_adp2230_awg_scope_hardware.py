@@ -14,14 +14,24 @@ Run: DWF_TEST_SERIAL=210417BAF36D ADP_AWG_SCOPE_CHANNELS=1 \\
 """
 from __future__ import annotations
 
+import contextlib
 import os
 
 import pytest
 
+
 # Scope channels the caller has cabled W1 to (e.g. "1", "2", "1,2"); empty = opt-out.
-_CABLED_CHANNELS = {
-    int(c) for c in os.environ.get("ADP_AWG_SCOPE_CHANNELS", "").replace(",", " ").split()
-}
+# Parsed defensively so a typo in the env var leaves a channel opted-out (clean skip)
+# rather than raising at import time and breaking collection of the whole dir.
+def _parse_cabled_channels() -> set[int]:
+    out: set[int] = set()
+    for tok in os.environ.get("ADP_AWG_SCOPE_CHANNELS", "").replace(",", " ").split():
+        with contextlib.suppress(ValueError):
+            out.add(int(tok))
+    return out
+
+
+_CABLED_CHANNELS = _parse_cabled_channels()
 
 
 def _is_adp2230(device) -> bool:
