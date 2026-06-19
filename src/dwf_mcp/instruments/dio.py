@@ -44,7 +44,7 @@ DIO_PULL_SCHEMA: dict[str, Any] = {
     "required": ["pin", "mode"],
     "properties": {
         "pin": {"type": "string", "pattern": "^(din|dio)\\d+$"},
-        "mode": {"type": "string", "enum": ["up", "down", "none"]},
+        "mode": {"type": "string", "enum": ["up", "down", "none", "keeper"]},
     },
 }
 
@@ -141,6 +141,9 @@ class DIO(Instrument):
         if not (info and info.dio_pull_supported):
             raise ValueError(f"pull not supported on {self.device._device_name()}")
         if pin.startswith("din"):
+            if mode == "keeper":
+                # DIN pull is the analogIO DINPP scalar (down/none/up only) — no keeper.
+                raise ValueError("keeper pull mode is not supported on the DIN bank (din* pins)")
             self.device.backend.din_pull_set(mode)
             return {"pin": pin, "mode": mode, "scope": "din_bank",
                     "note": "DIN pull is bank-global; affects all din pins"}

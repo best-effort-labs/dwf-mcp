@@ -605,6 +605,11 @@ class PydwfBackend(DwfBackend):
             up |= m
         elif mode == "down":
             down |= m
+        elif mode == "keeper":
+            # Keeper (bus-hold) = both pull-up and pull-down asserted (WaveForms
+            # convention; verified on ADP2230: holds last driven level when released).
+            up |= m
+            down |= m
         dio.pullSet(up, down)
 
     def din_pull_set(self, mode: str) -> None:

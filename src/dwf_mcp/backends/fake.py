@@ -318,6 +318,9 @@ class FakeBackend(DwfBackend):
             self.pull_up_mask |= m
         elif mode == "down":
             self.pull_down_mask |= m
+        elif mode == "keeper":  # bus-hold = both masks asserted
+            self.pull_up_mask |= m
+            self.pull_down_mask |= m
 
     def din_pull_set(self, mode: str) -> None:
         self.din_pull = mode

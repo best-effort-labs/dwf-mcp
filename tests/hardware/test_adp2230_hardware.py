@@ -47,7 +47,7 @@ def test_adp2230_drive_and_pull_set(device, artifacts) -> None:
     dio = DIO(device=device, artifacts=artifacts)
     out = dio.set_drive(milliamps=8.0, slew=0)
     assert out["milliamps"] == 8.0
-    for mode in ("up", "down", "none"):
+    for mode in ("up", "down", "keeper", "none"):
         res = dio.set_pull(pin="dio0", mode=mode)
         assert res["mode"] == mode
 

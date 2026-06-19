@@ -86,3 +86,26 @@ def test_set_pull_din_stores_mode(dd_dio: DIO) -> None:
     dd_dio.set_pull("din5", "down")
     be: FakeBackend = dd_dio.device.backend  # type: ignore[assignment]
     assert be.din_pull == "down"
+
+
+def test_set_pull_keeper_sets_both_masks(dd_dio: DIO) -> None:
+    """Keeper (bus-hold) asserts both pull-up and pull-down on the pin's bit."""
+    out = dd_dio.set_pull("dio24", "keeper")
+    be: FakeBackend = dd_dio.device.backend  # type: ignore[assignment]
+    assert be.pull_up_mask & 0b1
+    assert be.pull_down_mask & 0b1
+    assert out["mode"] == "keeper" and out["scope"] == "pin"
+
+
+def test_set_pull_none_clears_keeper(dd_dio: DIO) -> None:
+    dd_dio.set_pull("dio24", "keeper")
+    dd_dio.set_pull("dio24", "none")
+    be: FakeBackend = dd_dio.device.backend  # type: ignore[assignment]
+    assert not (be.pull_up_mask & 0b1)
+    assert not (be.pull_down_mask & 0b1)
+
+
+def test_set_pull_keeper_rejected_on_din_bank(dd_dio: DIO) -> None:
+    """The DIN bank pull is the DINPP scalar (down/none/up) — keeper isn't available."""
+    with pytest.raises(ValueError, match="keeper.*not supported.*DIN"):
+        dd_dio.set_pull("din5", "keeper")
