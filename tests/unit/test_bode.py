@@ -137,3 +137,16 @@ def test_measure_warmup_absorbs_transient(tmp_path):
     out = bode.measure()
     gains = np.load(out["path"])["gain_db"]
     assert gains[0] == pytest.approx(0.0, abs=0.5)   # not corrupted by the transient
+
+
+def test_measure_raises_on_bad_sample_rate_readback(tmp_path: Path) -> None:
+    # A soft-failed sample-rate readback (0) must abort the sweep rather than silently
+    # substitute the planned value (which would look coherent and hide bad data). The
+    # "bode" claim must still be released by the finally on this mid-sweep raise.
+    d = _dev(tmp_path)
+    d.backend.set_bode_sim(fc_hz=1000.0, rate_quantize=0.0)  # scope_sample_rate_get -> 0
+    bode = Bode(device=d, artifacts=ArtifactWriter(workspace=tmp_path))
+    bode.configure(start_hz=500.0, stop_hz=2000.0, points=3, settle_min_s=0.0, settle_cycles=0)
+    with pytest.raises(RuntimeError, match="sample-rate readback"):
+        bode.measure()
+    assert d.allocator.claimed_pins() == {}  # claim released despite the raise

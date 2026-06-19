@@ -100,6 +100,7 @@ class FakeBackend(DwfBackend):
         self.awg_calls: list[tuple[str, dict[str, Any]]] = []
         self._awg_freq: dict[int, float] = {}     # last configured freq per channel
         self._awg_amp: float = 0.0                # last configured amplitude
+        self._awg_started_channel: int | None = None  # last awg_start channel
         self._scope_sample_rate: float = 0.0      # last set_acquisition rate
         self._scope_buffer: int = 0               # last set_acquisition buffer
         self._bode_sim: _BodeSim | None = None    # set by set_bode_sim (Task 4)
@@ -256,6 +257,11 @@ class FakeBackend(DwfBackend):
         return sig.astype(np.float64)
 
     def _awg_active_channel(self) -> int:
+        # Prefer the channel most recently started (robust when several AWG channels
+        # were configured); fall back to the first configured channel for sim-direct
+        # tests that synthesize without an awg_start.
+        if self._awg_started_channel is not None:
+            return self._awg_started_channel
         return next(iter(self._awg_freq), 1)
 
     def scope_sample_rate_get(self) -> float:
@@ -355,6 +361,7 @@ class FakeBackend(DwfBackend):
 
     def awg_start(self, channel: int) -> None:
         self.awg_calls.append(("start", {"channel": channel}))
+        self._awg_started_channel = channel
 
     def awg_stop(self, channel: int) -> None:
         self.awg_calls.append(("stop", {"channel": channel}))

@@ -142,6 +142,11 @@ class Bode(Instrument):
             # one authorization covers every per-point awg_start (which call the backend
             # directly to avoid per-frequency gate/log overhead during a long sweep).
             self.device.gate_output("awg_start", channel=drive, amplitude=cfg["amplitude_v"])
+            # Clear any trigger left configured by a prior scope use: Bode free-runs each
+            # capture (settle, then arm), so a stale edge trigger would stall acquisition
+            # until the auto-timeout or capture at a trigger-dependent phase.
+            be.scope_set_trigger(source="none", channel=None, level_v=0.0,
+                                 condition="Either", position_s=0.0, timeout_s=0.0)
             self._warm_up(be, ref, dut, n_ch)
             for f_req in freqs:
                 self._point(be, info, float(f_req), cfg, ref, dut, n_ch, cols, sr_seen, buf_seen)
@@ -176,7 +181,14 @@ class Bode(Instrument):
             run_time_s=None,
         )
         be.awg_start(channel=cfg["drive_channel"])
-        f_act = be.awg_frequency_get(cfg["drive_channel"]) or f_req
+        # Actuals come from hardware readbacks ONLY — never fall back to the requested/
+        # planned values: a soft-failed readback (0/garbage) would make the capture look
+        # coherent-by-construction and suppress the noncoherent flag (silent garbage).
+        f_act = be.awg_frequency_get(cfg["drive_channel"])
+        if not f_act > 0:
+            raise RuntimeError(
+                f"AWG frequency readback returned {f_act!r} (expected > 0) at "
+                f"requested {f_req} Hz")
         plan = plan_acquisition(
             f_act,
             info.sample_rate_max_hz or 0.0,
@@ -197,15 +209,20 @@ class Bode(Instrument):
             buffer_size=plan.buffer_size,
             mode="Single",
         )
-        be.scope_arm()
-        sr_act = be.scope_sample_rate_get() or plan.sample_rate_hz
+        sr_act = be.scope_sample_rate_get()
+        if not sr_act > 0:
+            raise RuntimeError(
+                f"scope sample-rate readback returned {sr_act!r} (expected > 0)")
+        # Settle the AWG/DUT to steady state BEFORE arming: scope_arm() starts the single
+        # acquisition, so settling after the arm would capture the post-retune transient.
         self._settle(f_act, cfg)
+        be.scope_arm()
         self._await_done(plan)
         vin = np.asarray(be.scope_read(channel=ref, count=plan.buffer_size))
         vout = np.asarray(be.scope_read(channel=dut, count=plan.buffer_size))
         n = plan.buffer_size
-        achieved_cycles = f_act * n / sr_act if sr_act else 0.0
-        spc = sr_act / f_act if f_act else 0.0
+        achieved_cycles = f_act * n / sr_act
+        spc = sr_act / f_act
         qflags, coh_err = assess_quality(
             achieved_cycles, spc, f_act, sr_act, cfg["min_cycles"]
         )
