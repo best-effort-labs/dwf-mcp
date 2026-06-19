@@ -70,10 +70,15 @@ def compute_spectrum(
 
 def summarize_spectrum(result: SpectrumResult) -> dict[str, Any]:
     freq, mag_v, mag_dbv = result.frequency_hz, result.magnitude_v, result.magnitude_dbv
-    if mag_v.size == 0:
+    # < 2 bins means no AC content to pick a peak from (empty input, or a 1-sample
+    # capture passed to transform()): report DC-only rather than argmax-ing an empty slice.
+    if mag_v.size < 2:
+        dc_only = float(mag_dbv[0]) if mag_v.size else 0.0
         return {
-            "peak_frequency_hz": 0.0, "peak_magnitude_dbv": 0.0, "dc_magnitude_dbv": 0.0,
-            "noise_floor_dbv": 0.0, "rbw_hz": 0.0, "enbw_hz": 0.0, "span_hz": 0.0,
+            "peak_frequency_hz": 0.0, "peak_magnitude_dbv": dc_only,
+            "dc_magnitude_dbv": dc_only, "noise_floor_dbv": 0.0,
+            "rbw_hz": float(result.rbw_hz), "enbw_hz": float(result.enbw_hz),
+            "span_hz": float(freq[-1]) if mag_v.size else 0.0,
             "window": result.window, "amplitude": result.amplitude,
         }
     dc_dbv = float(mag_dbv[0])

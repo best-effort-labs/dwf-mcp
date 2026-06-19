@@ -96,8 +96,12 @@ class Spectrum(Instrument):
             template: SpectrumResult | None = None
             power = None
             for _ in range(cfg["averaging"]):
-                be.scope_configure(channel=ch, range_v=cfg["range_v"], offset_v=0.0,
-                                   coupling="DC", enable=True)
+                # Configure every AnalogIn channel (enable only `ch`); the engine is
+                # global, so leaving a previously-enabled scope channel on with stale
+                # range/coupling would perturb the acquisition. Mirrors Scope.configure.
+                for c in range(1, info.analog_in_channels + 1):
+                    be.scope_configure(channel=c, range_v=cfg["range_v"], offset_v=0.0,
+                                       coupling="DC", enable=(c == ch))
                 be.scope_set_acquisition(sample_rate_hz=cfg["sample_rate_hz"],
                                          buffer_size=cfg["buffer_size"], mode="Single")
                 be.scope_arm()

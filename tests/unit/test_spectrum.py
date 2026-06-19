@@ -97,3 +97,29 @@ def test_transform_reads_sample_rate_from_sidecar(tmp_path: Path):
     spec = Spectrum(device=d, artifacts=ArtifactWriter(workspace=tmp_path))
     out = spec.transform(capture_path=str(npz), channel=1, window="rectangular", amplitude="peak")
     assert out["summary"]["peak_frequency_hz"] == pytest.approx(50 * sr / n, rel=0.01)
+
+
+def test_measure_averaging_more_than_one(tmp_path: Path):
+    # Exercise the averaging loop (>1 capture, power-domain average).
+    d = _dev(tmp_path)
+    sr, n = 100_000.0, 4096
+    _canned_sine(d.backend, 50 * sr / n, sr, n, amp=1.0)  # type: ignore[arg-type]
+    spec = Spectrum(device=d, artifacts=ArtifactWriter(workspace=tmp_path))
+    spec.configure(channel=1, sample_rate_hz=sr, buffer_size=n,
+                   window="rectangular", amplitude="peak", averaging=3)
+    out = spec.measure()
+    assert out["summary"]["peak_frequency_hz"] == pytest.approx(50 * sr / n, rel=0.01)
+    assert out["summary"]["peak_magnitude_dbv"] == pytest.approx(0.0, abs=0.3)
+
+
+def test_measure_configures_all_channels_enabling_only_selected(tmp_path: Path):
+    # The AnalogIn engine is global: measure() must enable only `ch` and disable the
+    # other channel (so a previously-live scope channel can't perturb acquisition).
+    d = _dev(tmp_path)
+    be: FakeBackend = d.backend  # type: ignore[assignment]
+    _canned_sine(be, 1000.0, 100_000.0, 4096)
+    spec = Spectrum(device=d, artifacts=ArtifactWriter(workspace=tmp_path))
+    spec.configure(channel=1, sample_rate_hz=100_000.0, buffer_size=4096)
+    spec.measure()
+    enabled = {c[1]["channel"]: c[1]["enable"] for c in be.scope_calls if c[0] == "configure"}
+    assert enabled == {1: True, 2: False}  # 2-channel device: only ch1 enabled

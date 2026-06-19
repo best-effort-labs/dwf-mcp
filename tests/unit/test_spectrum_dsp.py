@@ -95,3 +95,13 @@ def test_summary_excludes_dc_from_peak():
 def test_summary_empty():
     s = summarize_spectrum(compute_spectrum(np.array([]), 100_000.0))
     assert s["peak_frequency_hz"] == 0.0 and s["peak_magnitude_dbv"] == 0.0
+
+
+def test_summary_tiny_capture_no_ac_bins():
+    # A 1-sample capture has only a DC bin and no AC content to pick a peak from;
+    # summarize must not argmax an empty slice — it reports DC-only.
+    s = summarize_spectrum(compute_spectrum(np.array([2.0]), 100_000.0,
+                                            window="rectangular", amplitude="peak"))
+    assert s["peak_frequency_hz"] == 0.0
+    assert s["dc_magnitude_dbv"] == pytest.approx(s["peak_magnitude_dbv"])
+    assert s["dc_magnitude_dbv"] == pytest.approx(20 * np.log10(2.0), abs=1e-6)
