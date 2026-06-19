@@ -64,3 +64,4 @@ def test_bode_point_zero_vin_does_not_crash():
     p = bode_point(vin, vout, sr, freq)
     assert p["vin_rms"] == pytest.approx(0.0, abs=1e-9)
     assert np.isfinite(p["gain_db"])  # floored, not inf/nan
+    assert p["gain_db"] < -200.0      # the dead-vin floor sentinel, not a real ratio

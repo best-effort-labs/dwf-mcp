@@ -21,11 +21,11 @@ def extract_tone(samples: np.ndarray, sample_rate_hz: float, freq_hz: float) -> 
     nn = np.arange(n)
     proj = np.dot(x, np.exp(-2j * np.pi * k * nn))
     peak = 2.0 * proj / n
-    return peak / np.sqrt(2.0)
+    return complex(peak / np.sqrt(2.0))
 
 
 def bode_point(vin: np.ndarray, vout: np.ndarray,
-               sample_rate_hz: float, freq_hz: float) -> dict:
+               sample_rate_hz: float, freq_hz: float) -> dict[str, float]:
     """gain_db = 20log10(|Vout|/|Vin|), phase_deg = angle(Vout/Vin) in (-180,180]
     (negative = lag). Ratiometric: AWG amplitude error and the absolute timing/phase
     reference cancel. Vrms values are absolute (for guardrails)."""
