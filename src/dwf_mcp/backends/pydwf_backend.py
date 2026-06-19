@@ -318,6 +318,9 @@ class PydwfBackend(DwfBackend):
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
         return np.asarray(self._analog_in.statusData(channel - 1, count), dtype=np.float64)
 
+    def scope_sample_rate_get(self) -> float:
+        return float(self._analog_in.frequencyGet())
+
     # Scope record-mode (AnalogIn streaming) — added in stage 3b.
 
     def scope_record_configure(
@@ -516,6 +519,10 @@ class PydwfBackend(DwfBackend):
 
     def awg_stop(self, channel: int) -> None:
         self._analog_out.configure(channel - 1, False)
+
+    def awg_frequency_get(self, channel: int) -> float:
+        from pydwf import DwfAnalogOutNode  # type: ignore[import-untyped]
+        return float(self._analog_out.nodeFrequencyGet(channel - 1, DwfAnalogOutNode.Carrier))
 
     # --- Pattern (DigitalOut) -----------------------------------------------
 

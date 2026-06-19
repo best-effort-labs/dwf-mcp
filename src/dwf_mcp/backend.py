@@ -84,6 +84,9 @@ class DwfBackend(ABC):
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
         raise NotImplementedError
 
+    def scope_sample_rate_get(self) -> float:
+        raise NotImplementedError
+
     # Scope record-mode (AnalogIn streaming) — added in stage 3b.
     def scope_record_configure(
         self,
@@ -156,6 +159,9 @@ class DwfBackend(ABC):
         raise NotImplementedError
 
     def awg_stop(self, channel: int) -> None:
+        raise NotImplementedError
+
+    def awg_frequency_get(self, channel: int) -> float:
         raise NotImplementedError
 
     # Pattern (DigitalOut) — added in stage 3a.

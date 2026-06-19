@@ -78,6 +78,11 @@ class FakeBackend(DwfBackend):
         self._i2c_reads: dict[int, bytes] = {}
         # AWG (AnalogOut) state
         self.awg_calls: list[tuple[str, dict[str, Any]]] = []
+        self._awg_freq: dict[int, float] = {}     # last configured freq per channel
+        self._awg_amp: float = 0.0                # last configured amplitude
+        self._scope_sample_rate: float = 0.0      # last set_acquisition rate
+        self._scope_buffer: int = 0               # last set_acquisition buffer
+        self._bode_sim = None                     # _BodeSim | None; set by set_bode_sim (Task 4)
         # Pattern (DigitalOut) state
         self.pattern_calls: list[tuple[str, dict[str, Any]]] = []
         # DIO (DigitalIO) state
@@ -163,6 +168,8 @@ class FakeBackend(DwfBackend):
         self.scope_calls.append(("set_acquisition", {
             "sample_rate_hz": sample_rate_hz, "buffer_size": buffer_size, "mode": mode,
         }))
+        self._scope_sample_rate = sample_rate_hz
+        self._scope_buffer = buffer_size
 
     def scope_set_trigger(self, source: str, channel: int | None, level_v: float,
                           condition: str, position_s: float, timeout_s: float) -> None:
@@ -185,6 +192,10 @@ class FakeBackend(DwfBackend):
         if channel in self._scope_canned:
             return self._scope_canned[channel][:count]
         return np.zeros(count, dtype=np.float64)
+
+    def scope_sample_rate_get(self) -> float:
+        sr = self._scope_sample_rate
+        return sr * self._bode_sim.rate_quantize if self._bode_sim else sr
 
     # Test helpers
     def set_scope_canned_data(self, channels: dict[int, np.ndarray[Any, Any]]) -> None:
@@ -268,6 +279,8 @@ class FakeBackend(DwfBackend):
             "amplitude_v": amplitude_v, "offset_v": offset_v,
             "phase_deg": phase_deg, "symmetry": symmetry, "run_time_s": run_time_s,
         }))
+        self._awg_freq[channel] = freq_hz
+        self._awg_amp = amplitude_v
 
     def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
         self.awg_calls.append(("upload_custom", {"channel": channel, "n_samples": len(samples)}))
@@ -277,6 +290,11 @@ class FakeBackend(DwfBackend):
 
     def awg_stop(self, channel: int) -> None:
         self.awg_calls.append(("stop", {"channel": channel}))
+
+    def awg_frequency_get(self, channel: int) -> float:
+        # Apply an optional quantization nudge so tests can exercise the noncoherent path.
+        f = self._awg_freq.get(channel, 0.0)
+        return f * self._bode_sim.freq_quantize if self._bode_sim else f
 
     # --- Pattern (DigitalOut) ---
 
