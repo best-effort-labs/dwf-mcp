@@ -170,3 +170,21 @@ def test_detect_clip():
     assert detect_clip(np.array([0.1, -0.99, 0.3]), range_v=1.0) is True
     assert detect_clip(np.array([0.1, -0.5, 0.3]), range_v=1.0) is False
     assert detect_clip(np.array([]), range_v=1.0) is False
+
+
+def test_plan_acquisition_rejects_nonpositive_freq():
+    with pytest.raises(ValueError, match="freq_hz"):
+        plan_acquisition(0.0, max_sample_rate_hz=100e6, max_buffer=1 << 20)
+    with pytest.raises(ValueError, match="freq_hz"):
+        plan_acquisition(-5.0, max_sample_rate_hz=100e6, max_buffer=1 << 20)
+
+
+def test_plan_acquisition_buffer_floor_keeps_cycles_consistent():
+    # Degenerate cap below the 16-sample floor: buffer is bumped to 16, and cycles must
+    # stay consistent with the FINAL buffer (buffer_size == cycles * samples_per_cycle).
+    p = plan_acquisition(1000.0, max_sample_rate_hz=100e6, max_buffer=8,
+                         samples_per_cycle=64, min_cycles=16)
+    assert p.buffer_size == 16
+    assert p.clamp_flags & QF_BUFFER_LIMITED
+    assert p.cycles == pytest.approx(16 / 64)                       # 0.25
+    assert p.buffer_size == pytest.approx(p.cycles * p.samples_per_cycle)

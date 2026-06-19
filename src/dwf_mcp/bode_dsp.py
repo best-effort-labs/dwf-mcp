@@ -95,19 +95,22 @@ def plan_acquisition(freq_hz: float, max_sample_rate_hz: float, max_buffer: int,
     """Size a COHERENT (integer-cycle) capture for one tone, clamped to device caps.
     Returns the requested plan + the clamp flags. The ACHIEVED metrics are recomputed
     from hardware readbacks by the instrument (assess_quality), never from this."""
+    if freq_hz <= 0:
+        raise ValueError(f"freq_hz must be > 0, got {freq_hz}")
     flags = 0
     sr = freq_hz * samples_per_cycle
     if max_sample_rate_hz and sr > max_sample_rate_hz:
         sr = max_sample_rate_hz
         flags |= QF_SAMPLE_RATE_LIMITED
-    cycles = float(min_cycles)
-    buffer = int(round(cycles * sr / freq_hz))
+    spc = sr / freq_hz
+    buffer = int(round(min_cycles * spc))
     if max_buffer and buffer > max_buffer:
         buffer = max_buffer
         flags |= QF_BUFFER_LIMITED
-        cycles = buffer * freq_hz / sr
     buffer = max(buffer, 16)
-    spc = sr / freq_hz
+    # cycles is derived from the FINAL buffer so the AcqPlan is always self-consistent
+    # (buffer_size == cycles * samples_per_cycle), even after a clamp or the 16-sample floor.
+    cycles = buffer / spc
     return AcqPlan(sample_rate_hz=sr, buffer_size=buffer, cycles=cycles,
                    samples_per_cycle=spc, clamp_flags=flags)
 
