@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import time
 
 import pytest
 
@@ -52,8 +53,13 @@ def test_spectrum_reads_awg_tone(device, artifacts, scope_ch) -> None:
     try:
         awg.configure(channel=1, function="Sine", frequency_hz=10_000.0, amplitude_v=1.0)
         awg.start(channel=1)
+        time.sleep(0.3)  # let the AWG output settle
         spec.configure(channel=scope_ch, sample_rate_hz=1_000_000.0, buffer_size=16384,
                        window="flattop", amplitude="rms")
+        # The first AnalogIn acquisition after a device (re)open returns a stale buffer
+        # (the conftest dut_caps probe does a close->reopen); free-run measure() takes
+        # it as-is. Discard one warm-up acquisition, then measure for real.
+        spec.measure()
         s = spec.measure()["summary"]
     finally:
         awg.stop(channel=1)
