@@ -24,6 +24,7 @@ from dwf_mcp.instruments.logic import Logic
 from dwf_mcp.instruments.pattern import Pattern
 from dwf_mcp.instruments.scope import Scope
 from dwf_mcp.instruments.sniff import Sniff
+from dwf_mcp.instruments.spectrum import Spectrum
 from dwf_mcp.instruments.spi import SPI
 from dwf_mcp.instruments.supply import Supply
 from dwf_mcp.instruments.uart import UART
@@ -354,6 +355,7 @@ def build_app(
     app.register_instrument(CAN)
     app.register_instrument(Sniff)
     app.register_instrument(DecoderInstrument)
+    app.register_instrument(Spectrum)
     return app
 
 
