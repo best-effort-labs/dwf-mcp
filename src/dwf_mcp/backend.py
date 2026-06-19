@@ -35,6 +35,9 @@ class DeviceInfo:
     digital_in_rate_max_hz: float = 0.0
     digital_in_channels: int = 0
     dio_pull_supported: bool = False
+    # Pull is one bank-wide setting (can't be set per-pin) — e.g. ADP2230, where the
+    # SDK expands any single-bit pull to the whole bank. Detected from pullInfo width.
+    dio_pull_bank_global: bool = False
     dio_drive_supported: bool = False
     dio_drive_amp_min: float = 0.0
     dio_drive_amp_max: float = 0.0

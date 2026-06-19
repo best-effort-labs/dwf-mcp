@@ -109,3 +109,45 @@ def test_set_pull_keeper_rejected_on_din_bank(dd_dio: DIO) -> None:
     """The DIN bank pull is the DINPP scalar (down/none/up) — keeper isn't available."""
     with pytest.raises(ValueError, match="keeper.*not supported.*DIN"):
         dd_dio.set_pull("din5", "keeper")
+
+
+# --- bank-global pull (ADP2230): one pull setting for the whole DIO bank ---
+
+@pytest.fixture
+def bank_global_dio(tmp_path: Path) -> DIO:
+    from dwf_mcp.backend import DeviceInfo
+    info = DeviceInfo(
+        serial="ADP", model="Analog Discovery Pro 2230", firmware="x",
+        sample_rate_max_hz=1e8, dio_count=16, analog_in_channels=2,
+        analog_out_channels=3, devid=14,
+        dio_pull_supported=True, dio_pull_bank_global=True,
+    )
+    d = DwfDevice(
+        backend=FakeBackend(devices=[info]), policy=SafetyPolicy(),
+        allocator=PinAllocator(), workspace=tmp_path, idle_timeout_s=60,
+    )
+    d.open(serial="ADP")
+    return DIO(device=d, artifacts=ArtifactWriter(workspace=tmp_path))
+
+
+def test_bank_global_sets_whole_bank_and_reports_scope(bank_global_dio: DIO) -> None:
+    out = bank_global_dio.set_pull("dio0", "up")
+    be: FakeBackend = bank_global_dio.device.backend  # type: ignore[assignment]
+    assert be.pull_up_mask == 0xFFFF and be.pull_down_mask == 0
+    assert out["scope"] == "bank"
+
+
+def test_bank_global_switch_does_not_accumulate(bank_global_dio: DIO) -> None:
+    """The bug this fixes: up then down must NOT leave the up still set bank-wide."""
+    bank_global_dio.set_pull("dio0", "up")
+    bank_global_dio.set_pull("dio1", "down")
+    be: FakeBackend = bank_global_dio.device.backend  # type: ignore[assignment]
+    assert be.pull_up_mask == 0 and be.pull_down_mask == 0xFFFF
+
+
+def test_bank_global_keeper_and_none(bank_global_dio: DIO) -> None:
+    bank_global_dio.set_pull("dio0", "keeper")
+    be: FakeBackend = bank_global_dio.device.backend  # type: ignore[assignment]
+    assert be.pull_up_mask == 0xFFFF and be.pull_down_mask == 0xFFFF
+    bank_global_dio.set_pull("dio0", "none")
+    assert be.pull_up_mask == 0 and be.pull_down_mask == 0

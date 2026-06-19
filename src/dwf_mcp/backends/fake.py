@@ -311,6 +311,12 @@ class FakeBackend(DwfBackend):
         self._dio_voltage = volts
 
     def dio_pull_set(self, bit_idx: int, mode: str) -> None:
+        if self._open_info is not None and self._open_info.dio_pull_bank_global:
+            # Bank-global pull: whole DIO bank set to one mode (mirrors real ADP2230).
+            full = (1 << self._open_info.dio_count) - 1
+            self.pull_up_mask = full if mode in ("up", "keeper") else 0
+            self.pull_down_mask = full if mode in ("down", "keeper") else 0
+            return
         m = 1 << bit_idx
         self.pull_up_mask &= ~m
         self.pull_down_mask &= ~m

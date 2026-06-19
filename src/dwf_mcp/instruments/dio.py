@@ -150,6 +150,9 @@ class DIO(Instrument):
         assert self.device.inventory is not None  # guaranteed by validate_pin
         bit = self.device.inventory.subsystem_bit(pin, "digitalio")
         self.device.backend.dio_pull_set(bit_idx=bit, mode=mode)
+        if info.dio_pull_bank_global:
+            return {"pin": pin, "mode": mode, "scope": "bank",
+                    "note": "pull is bank-global on this device; affects all dio pins"}
         return {"pin": pin, "mode": mode, "scope": "pin"}
 
     def set_drive(self, milliamps: float, slew: int, bank: int = 0) -> dict[str, Any]:
