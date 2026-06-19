@@ -22,7 +22,9 @@ class _BodeSim:
     harmonic2: float = 0.0          # 2nd-harmonic fraction on the DUT channel
     clip: bool = False
     transient_first: bool = False   # corrupt the FIRST acquisition (warm-up sanity)
-    _armed_count: int = field(default=0)
+    # Runtime counter (scope_arm bumps it); excluded from __init__/repr/eq so it
+    # can't be injected via set_bode_sim(**kwargs) and doesn't affect equality.
+    _armed_count: int = field(default=0, init=False, repr=False, compare=False)
 
 _FAKE_DEVICE = DeviceInfo(
     serial="FAKE-AD3-0001",
@@ -101,6 +103,10 @@ class FakeBackend(DwfBackend):
         self._scope_sample_rate: float = 0.0      # last set_acquisition rate
         self._scope_buffer: int = 0               # last set_acquisition buffer
         self._bode_sim: _BodeSim | None = None    # set by set_bode_sim (Task 4)
+        # Single seeded RNG drawn across reads, so successive channel reads get
+        # INDEPENDENT (but deterministic) noise — a fresh default_rng(0) per read
+        # would hand ref and dut identical noise that cancels in the gain/phase ratio.
+        self._bode_rng = np.random.default_rng(0)
         # Pattern (DigitalOut) state
         self.pattern_calls: list[tuple[str, dict[str, Any]]] = []
         # DIO (DigitalIO) state
@@ -235,12 +241,14 @@ class FakeBackend(DwfBackend):
             delay = 2 * np.pi * f * sim.dut_delay_samples / sr if sr else 0.0
             sig = amp * g * np.cos(2 * np.pi * f * t + ph - delay)
             if sim.harmonic2:
+                # Post-RC distortion model: 2nd harmonic scaled by the fundamental's
+                # gain g=H(f) (NOT H(2f)) — i.e. distortion injected after the filter.
                 sig = sig + amp * g * sim.harmonic2 * np.cos(2 * 2 * np.pi * f * t)
         else:
             sig = np.zeros(count)
         sig = sig + sim.dc_offset
         if sim.noise_std:
-            sig = sig + np.random.default_rng(0).normal(0.0, sim.noise_std, count)
+            sig = sig + self._bode_rng.normal(0.0, sim.noise_std, count)
         if sim.transient_first and sim._armed_count <= 1:
             sig = sig + 5.0  # gross corruption on the first armed capture
         if sim.clip:
