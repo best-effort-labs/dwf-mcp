@@ -3,7 +3,22 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dwf_mcp.bode_dsp import bode_point, extract_tone
+from dwf_mcp.bode_dsp import (
+    QF_BUFFER_LIMITED,
+    QF_LOW_CYCLES,
+    QF_LOW_OVERSAMPLING,
+    QF_LOW_SAMPLES_PER_CYCLE,
+    QF_NEAR_NYQUIST,
+    QF_NONCOHERENT,
+    QF_SAMPLE_RATE_LIMITED,
+    QF_VERY_LOW_SAMPLES_PER_CYCLE,
+    assess_quality,
+    bode_point,
+    detect_clip,
+    extract_tone,
+    frequency_grid,
+    plan_acquisition,
+)
 
 
 def _cos(freq, amp, sr, n, phase_deg=0.0):
@@ -65,3 +80,93 @@ def test_bode_point_zero_vin_does_not_crash():
     assert p["vin_rms"] == pytest.approx(0.0, abs=1e-9)
     assert np.isfinite(p["gain_db"])  # floored, not inf/nan
     assert p["gain_db"] < -200.0      # the dead-vin floor sentinel, not a real ratio
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — planner, quality flags, frequency grid, clip detection
+# ---------------------------------------------------------------------------
+
+
+def test_plan_acquisition_coherent_unclamped():
+    # 1 kHz, plenty of headroom -> integer cycles, no flags.
+    p = plan_acquisition(1000.0, max_sample_rate_hz=100e6, max_buffer=1 << 20,
+                         samples_per_cycle=64, min_cycles=16)
+    assert p.sample_rate_hz == pytest.approx(64_000.0)
+    assert p.buffer_size == 16 * 64                       # 1024 = 16 cycles * 64 spc
+    assert p.cycles == pytest.approx(16.0)
+    assert p.clamp_flags == 0
+
+
+def test_plan_acquisition_high_freq_rate_clamped():
+    # Demand 64 spc at 5 MHz = 320 MHz > 100 MHz cap -> sample_rate_limited.
+    p = plan_acquisition(5e6, max_sample_rate_hz=100e6, max_buffer=1 << 20,
+                         samples_per_cycle=64, min_cycles=16)
+    assert p.sample_rate_hz == pytest.approx(100e6)
+    assert p.clamp_flags & QF_SAMPLE_RATE_LIMITED
+
+
+def test_plan_acquisition_low_freq_buffer_clamped():
+    # 1 Hz, 64 spc -> unclamped buffer = 16*64 = 1024 > 512 cap
+    # -> buffer_limited flag + cycles forced below min_cycles.
+    p = plan_acquisition(1.0, max_sample_rate_hz=100e6, max_buffer=512,
+                         samples_per_cycle=64, min_cycles=16)
+    assert p.buffer_size == 512
+    assert p.clamp_flags & QF_BUFFER_LIMITED
+    assert p.cycles < 16.0
+
+
+def test_assess_quality_clean_point():
+    flags, coh_err = assess_quality(achieved_cycles=16.0, samples_per_cycle=64.0,
+                                    freq_hz=1000.0, sample_rate_hz=64_000.0,
+                                    min_cycles=16)
+    assert flags == 0
+    assert coh_err == pytest.approx(0.0, abs=1e-9)
+
+
+def test_assess_quality_noncoherent_flag():
+    flags, coh_err = assess_quality(achieved_cycles=16.3, samples_per_cycle=64.0,
+                                    freq_hz=1000.0, sample_rate_hz=64_000.0,
+                                    min_cycles=16)
+    assert flags & QF_NONCOHERENT
+    assert coh_err == pytest.approx(0.3, abs=1e-9)
+
+
+def test_assess_quality_low_and_very_low_samples_per_cycle():
+    f_low, _ = assess_quality(16.0, 15.0, 1000.0, 15_000.0, 16)   # <20
+    assert f_low & QF_LOW_SAMPLES_PER_CYCLE
+    assert not (f_low & QF_VERY_LOW_SAMPLES_PER_CYCLE)
+    f_vlow, _ = assess_quality(16.0, 8.0, 1000.0, 8000.0, 16)     # <10
+    assert f_vlow & QF_VERY_LOW_SAMPLES_PER_CYCLE
+
+
+def test_assess_quality_oversampling_and_nyquist():
+    # freq = fs/8 -> > fs/10 (low_oversampling) but < 0.4*fs (not near_nyquist)
+    f1, _ = assess_quality(16.0, 8.0, 1000.0, 8000.0, 16)
+    assert f1 & QF_LOW_OVERSAMPLING
+    assert not (f1 & QF_NEAR_NYQUIST)
+    # freq = 0.45*fs -> near_nyquist
+    f2, _ = assess_quality(16.0, 2.2, 4500.0, 10_000.0, 16)
+    assert f2 & QF_NEAR_NYQUIST
+
+
+def test_assess_quality_low_cycles():
+    flags, _ = assess_quality(4.0, 64.0, 1000.0, 64_000.0, 16)
+    assert flags & QF_LOW_CYCLES
+
+
+def test_frequency_grid_log_and_linear():
+    g_log = frequency_grid(10.0, 100_000.0, 5, "log")
+    assert g_log[0] == pytest.approx(10.0) and g_log[-1] == pytest.approx(100_000.0)
+    assert g_log[2] == pytest.approx(1000.0, rel=1e-6)  # geometric midpoint
+    g_lin = frequency_grid(0.0, 100.0, 3, "linear")
+    assert list(g_lin) == pytest.approx([0.0, 50.0, 100.0])
+    with pytest.raises(ValueError):
+        frequency_grid(10.0, 100.0, 1, "log")
+    with pytest.raises(ValueError):
+        frequency_grid(10.0, 100.0, 5, "bogus")
+
+
+def test_detect_clip():
+    assert detect_clip(np.array([0.1, -0.99, 0.3]), range_v=1.0) is True
+    assert detect_clip(np.array([0.1, -0.5, 0.3]), range_v=1.0) is False
+    assert detect_clip(np.array([]), range_v=1.0) is False
