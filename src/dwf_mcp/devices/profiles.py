@@ -38,6 +38,7 @@ class DeviceProfile:
     fixed_supply_voltages: dict[str, float] | None = None
     pin_banks: list[PinBank] | None = None
     dio_voltage_range: tuple[float, float] | None = None
+    trigger_count: int = 2  # external trigger I/O count → trig1..trigN (all current devices: 2)
 
     def build_resource_groups(
         self, analog_in_channels: int, user_awg_count: int
