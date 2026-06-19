@@ -138,6 +138,9 @@ class Bode(Instrument):
         buf_seen: list[int] = []
         self.device.allocator.claim("bode", pins)
         try:
+            # Gate once for the whole sweep: amplitude is constant across all points, so
+            # one authorization covers every per-point awg_start (which call the backend
+            # directly to avoid per-frequency gate/log overhead during a long sweep).
             self.device.gate_output("awg_start", channel=drive, amplitude=cfg["amplitude_v"])
             self._warm_up(be, ref, dut, n_ch)
             for f_req in freqs:
@@ -226,7 +229,11 @@ class Bode(Instrument):
         buf_seen.append(n)
 
     def _warm_up(self, be: Any, ref: int, dut: int, n_ch: int) -> None:
-        """One throwaway capture: the first AnalogIn acquisition after open is stale."""
+        """One throwaway capture: the first AnalogIn acquisition after open is stale.
+        Fired unconditionally on every measure() (a sweep is heavyweight, so an
+        always-flush is strictly safer than per-open tracking at negligible cost).
+        One scope_arm captures all enabled channels in the same cycle, so a single
+        scope_read is enough to discard the stale acquisition for both ref and dut."""
         for c in range(1, n_ch + 1):
             be.scope_configure(
                 channel=c,
