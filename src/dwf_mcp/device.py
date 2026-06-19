@@ -46,6 +46,9 @@ class DwfDevice:
         self.idle_timeout_s = idle_timeout_s
         self.vcd_enabled: bool = True
         self._info: DeviceInfo | None = None
+        # Bumped on every successful open(); lets instruments detect a fresh device
+        # session (e.g. to flush a stale post-open AnalogIn buffer exactly once).
+        self.open_count: int = 0
         self._last_activity: float | None = None
         self._serial_request: str | None = None
         self._config_request: str | None = None
@@ -86,6 +89,7 @@ class DwfDevice:
                 self.backend.close()
             raise
         self._info = info
+        self.open_count += 1
         if self.profile is not None and self.profile.dio_voltage_range is not None:
             lo, hi = self.profile.dio_voltage_range
             self.current_dio_voltage = hi  # DD powers up at its max rail

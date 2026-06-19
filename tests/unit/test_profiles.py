@@ -93,3 +93,11 @@ def test_adp2230_profile_supports_all_registered_instruments(tmp_path) -> None:
     supported = resolve_profile(14).supported_instruments
     missing = registered - supported
     assert missing == set(), f"ADP2230 profile missing registered instruments: {missing}"
+
+
+def test_spectrum_supported_on_analog_not_on_dd() -> None:
+    from dwf_mcp.devices.profiles import _ALL_INSTRUMENTS, resolve_profile
+    assert "spectrum" in _ALL_INSTRUMENTS                       # analog devices
+    assert "spectrum" in resolve_profile(10).supported_instruments   # AD3
+    assert "spectrum" in resolve_profile(14).supported_instruments   # ADP2230
+    assert "spectrum" not in resolve_profile(4).supported_instruments  # DD (digital-only)
