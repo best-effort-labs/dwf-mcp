@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
 from dwf_mcp.backend import DeviceInfo, DwfBackend, DwfBackendError
+
+
+@dataclass
+class _BodeSim:
+    ref_channel: int = 1
+    dut_channel: int = 2
+    fc_hz: float = 1000.0           # one-pole RC corner
+    range_v: float = 5.0
+    freq_quantize: float = 1.0      # actual_freq = requested * this (noncoherence test)
+    rate_quantize: float = 1.0
+    dut_delay_samples: float = 0.0  # extra sub-sample delay on the DUT channel
+    dc_offset: float = 0.0
+    noise_std: float = 0.0
+    harmonic2: float = 0.0          # 2nd-harmonic fraction on the DUT channel
+    clip: bool = False
+    transient_first: bool = False   # corrupt the FIRST acquisition (warm-up sanity)
+    _armed_count: int = field(default=0)
 
 _FAKE_DEVICE = DeviceInfo(
     serial="FAKE-AD3-0001",
@@ -82,7 +100,7 @@ class FakeBackend(DwfBackend):
         self._awg_amp: float = 0.0                # last configured amplitude
         self._scope_sample_rate: float = 0.0      # last set_acquisition rate
         self._scope_buffer: int = 0               # last set_acquisition buffer
-        self._bode_sim = None                     # _BodeSim | None; set by set_bode_sim (Task 4)
+        self._bode_sim: _BodeSim | None = None    # set by set_bode_sim (Task 4)
         # Pattern (DigitalOut) state
         self.pattern_calls: list[tuple[str, dict[str, Any]]] = []
         # DIO (DigitalIO) state
@@ -181,6 +199,8 @@ class FakeBackend(DwfBackend):
     def scope_arm(self) -> None:
         self.scope_calls.append(("arm", {}))
         self._scope_status_idx = 0
+        if self._bode_sim is not None:
+            self._bode_sim._armed_count += 1
 
     def scope_status(self) -> str:
         idx = min(self._scope_status_idx, len(self._scope_status_sequence) - 1)
@@ -189,9 +209,46 @@ class FakeBackend(DwfBackend):
         return result
 
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
+        if self._bode_sim is not None:
+            return self._bode_sim_read(channel, count)
         if channel in self._scope_canned:
             return self._scope_canned[channel][:count]
         return np.zeros(count, dtype=np.float64)
+
+    def _bode_sim_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
+        sim = self._bode_sim
+        assert sim is not None
+        # Actual (quantized) values — exactly what the getters report.
+        f = self._awg_freq.get(self._awg_active_channel(), 0.0) * sim.freq_quantize
+        sr = self._scope_sample_rate * sim.rate_quantize
+        amp = self._awg_amp
+        nn = np.arange(count)
+        t = nn / sr if sr else nn * 0.0
+        ref = amp * np.cos(2 * np.pi * f * t)
+        if channel == sim.ref_channel:
+            sig = ref
+        elif channel == sim.dut_channel:
+            # one-pole RC: gain 1/sqrt(1+(f/fc)^2), phase -atan(f/fc)
+            ratio = f / sim.fc_hz
+            g = 1.0 / np.sqrt(1.0 + ratio * ratio)
+            ph = -np.arctan(ratio)
+            delay = 2 * np.pi * f * sim.dut_delay_samples / sr if sr else 0.0
+            sig = amp * g * np.cos(2 * np.pi * f * t + ph - delay)
+            if sim.harmonic2:
+                sig = sig + amp * g * sim.harmonic2 * np.cos(2 * 2 * np.pi * f * t)
+        else:
+            sig = np.zeros(count)
+        sig = sig + sim.dc_offset
+        if sim.noise_std:
+            sig = sig + np.random.default_rng(0).normal(0.0, sim.noise_std, count)
+        if sim.transient_first and sim._armed_count <= 1:
+            sig = sig + 5.0  # gross corruption on the first armed capture
+        if sim.clip:
+            sig = np.clip(sig, -sim.range_v, sim.range_v)
+        return sig.astype(np.float64)
+
+    def _awg_active_channel(self) -> int:
+        return next(iter(self._awg_freq), 1)
 
     def scope_sample_rate_get(self) -> float:
         sr = self._scope_sample_rate
@@ -207,6 +264,9 @@ class FakeBackend(DwfBackend):
 
     def simulate_unplug(self) -> None:
         self._open_info = None
+
+    def set_bode_sim(self, **kwargs: Any) -> None:
+        self._bode_sim = _BodeSim(**kwargs)
 
     # --- Supply (AnalogIO) ---
 
