@@ -87,3 +87,51 @@ def test_classic_inventory_unchanged():
     assert inv.input_only == frozenset()
     assert inv.subsystem_bit("dio5", "digitalio") == 5
     assert inv.subsystem_bit("dio5", "digitalin") == 5
+
+
+def test_virtual_resources_gated_by_supported_instruments():
+    # DD (devid 4) supports only {dio, logic, pattern} -> only the digital_in engine.
+    dd = build_inventory(resolve_profile(4), _dd_info())
+    assert dd.virtual_resources == ["digital_in"]
+    assert dd.is_valid_pin("digital_in")
+    for eng in ("i2c_engine", "spi_engine", "uart_engine", "can_engine"):
+        assert not dd.is_valid_pin(eng), f"DD should not expose {eng}"
+
+    # AD3 (devid 10) supports all instruments -> all five engines.
+    ad3 = build_inventory(resolve_profile(10), _info())
+    assert set(ad3.virtual_resources) == {
+        "digital_in", "i2c_engine", "spi_engine", "uart_engine", "can_engine"
+    }
+
+
+def test_trigger_pins_from_profile_trigger_count():
+    assert build_inventory(resolve_profile(10), _info()).trigger_pins == ["trig1", "trig2"]
+    assert build_inventory(resolve_profile(4), _dd_info()).trigger_pins == ["trig1", "trig2"]
+
+    from dwf_mcp.devices.profiles import DeviceProfile
+    p = DeviceProfile(
+        devid=999, name="No-Trigger", user_awg_count=0,
+        supported_instruments=frozenset({"dio"}), dio_voltage_options=[3.3],
+        trigger_count=0,
+    )
+    info = DeviceInfo(serial="X", model="m", firmware="", devid=999,
+                      sample_rate_max_hz=0.0, dio_count=8,
+                      analog_in_channels=0, analog_out_channels=0)
+    assert build_inventory(p, info).trigger_pins == []
+
+
+def test_allocator_rejects_ungated_engine_on_dd():
+    """With virtual_resources gated, a DD-configured allocator rejects a claim of an
+    engine the device doesn't have — the namespace is now authoritative. (In practice
+    the server blocks unsupported instruments before this, so this is a safety net.)"""
+    import pytest
+
+    from dwf_mcp.allocator import PinAllocationError, PinAllocator
+
+    inv = build_inventory(resolve_profile(4), _dd_info())  # DD
+    alloc = PinAllocator()
+    alloc.configure(known_pins=inv.all_known(), resource_groups=[])
+
+    alloc.claim("logic", ["digital_in"])  # present on the DD
+    with pytest.raises(PinAllocationError, match="i2c_engine"):
+        alloc.claim("i2c", ["i2c_engine"])  # not on the DD

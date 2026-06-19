@@ -7,8 +7,23 @@ from dataclasses import dataclass
 from dwf_mcp.backend import DeviceInfo
 from dwf_mcp.devices.profiles import DeviceProfile, PinBank
 
-# Virtual (non-physical) resources the allocator arbitrates, independent of device.
-_VIRTUAL_RESOURCES = ["digital_in", "i2c_engine", "spi_engine", "uart_engine", "can_engine"]
+# protocol instrument -> the virtual engine resource the allocator arbitrates
+_ENGINE_RESOURCE = {
+    "i2c": "i2c_engine", "spi": "spi_engine",
+    "uart": "uart_engine", "can": "can_engine",
+}
+
+
+def _virtual_resources(supported: frozenset[str]) -> list[str]:
+    """The virtual (non-physical) resources the allocator arbitrates, for a device
+    with these supported instruments. `digital_in` = the DigitalIn block (logic
+    analyzer + sniff observe); each protocol engine is present only if its
+    instrument is supported."""
+    res: list[str] = []
+    if "logic" in supported:
+        res.append("digital_in")
+    res += [eng for instr, eng in _ENGINE_RESOURCE.items() if instr in supported]
+    return res
 
 
 @dataclass(frozen=True)
@@ -73,8 +88,8 @@ def build_inventory(profile: DeviceProfile, info: DeviceInfo) -> PinInventory:
         scope_pins=[f"scope{i}" for i in range(1, info.analog_in_channels + 1)],
         awg_pins=[f"awg{i}" for i in range(1, profile.user_awg_count + 1)],
         supply_pins=["vpos", "vneg"] if "supply" in profile.supported_instruments else [],
-        trigger_pins=["trig1", "trig2"],
-        virtual_resources=list(_VIRTUAL_RESOURCES),
+        trigger_pins=[f"trig{i}" for i in range(1, profile.trigger_count + 1)],
+        virtual_resources=_virtual_resources(profile.supported_instruments),
         input_only=frozenset(input_only),
         _bank_of=bank_of,
     )
