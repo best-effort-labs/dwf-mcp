@@ -44,7 +44,7 @@ DIO_PULL_SCHEMA: dict[str, Any] = {
     "required": ["pin", "mode"],
     "properties": {
         "pin": {"type": "string", "pattern": "^(din|dio)\\d+$"},
-        "mode": {"type": "string", "enum": ["up", "down", "none"]},
+        "mode": {"type": "string", "enum": ["up", "down", "none", "keeper"]},
     },
 }
 
@@ -141,12 +141,18 @@ class DIO(Instrument):
         if not (info and info.dio_pull_supported):
             raise ValueError(f"pull not supported on {self.device._device_name()}")
         if pin.startswith("din"):
+            if mode == "keeper":
+                # DIN pull is the analogIO DINPP scalar (down/none/up only) — no keeper.
+                raise ValueError("keeper pull mode is not supported on the DIN bank (din* pins)")
             self.device.backend.din_pull_set(mode)
             return {"pin": pin, "mode": mode, "scope": "din_bank",
                     "note": "DIN pull is bank-global; affects all din pins"}
         assert self.device.inventory is not None  # guaranteed by validate_pin
         bit = self.device.inventory.subsystem_bit(pin, "digitalio")
         self.device.backend.dio_pull_set(bit_idx=bit, mode=mode)
+        if info.dio_pull_bank_global:
+            return {"pin": pin, "mode": mode, "scope": "bank",
+                    "note": "pull is bank-global on this device; affects all dio pins"}
         return {"pin": pin, "mode": mode, "scope": "pin"}
 
     def set_drive(self, milliamps: float, slew: int, bank: int = 0) -> dict[str, Any]:

@@ -166,8 +166,8 @@ class PydwfBackend(DwfBackend):
             do_buffer_max = 0
         digital_in_rate_max_hz = float(di.internalClockInfo())
         digital_in_channels = int(di.bitsInfo())
-        pull_supported, drive_supported, amp_min, amp_max, amp_steps, slew_steps = \
-            self._probe_dio_caps(device)
+        (pull_supported, pull_bank_global, drive_supported, amp_min, amp_max,
+         amp_steps, slew_steps) = self._probe_dio_caps(device)
         info = DeviceInfo(
             serial=enum.serialNumber(target_index),
             model=enum.deviceName(target_index),
@@ -186,6 +186,7 @@ class PydwfBackend(DwfBackend):
             digital_in_rate_max_hz=digital_in_rate_max_hz,
             digital_in_channels=digital_in_channels,
             dio_pull_supported=pull_supported,
+            dio_pull_bank_global=pull_bank_global,
             dio_drive_supported=drive_supported,
             dio_drive_amp_min=amp_min, dio_drive_amp_max=amp_max,
             dio_drive_amp_steps=amp_steps, dio_drive_slew_steps=slew_steps,
@@ -194,11 +195,18 @@ class PydwfBackend(DwfBackend):
         self._info = info
         return info
 
-    def _probe_dio_caps(self, device: Any) -> tuple[bool, bool, float, float, int, int]:
+    def _probe_dio_caps(
+        self, device: Any
+    ) -> tuple[bool, bool, bool, float, float, int, int]:
         dio = device.digitalIO
+        pull_bank_global = False
         try:
-            pu, _pd = dio.pullInfo()
-            pull_supported = pu != 0
+            pu, pd = dio.pullInfo()
+            mask = pu | pd  # settable pull bits (union of up/down, in case asymmetric)
+            pull_supported = mask != 0
+            # one settable bit => a single bank-wide control (ADP2230); many bits =>
+            # per-pin (Digital Discovery, pullInfo=0x1FFFF).
+            pull_bank_global = pull_supported and bin(mask).count("1") <= 1
         except Exception:
             pull_supported = False
         amp_min = amp_max = 0.0
@@ -216,7 +224,8 @@ class PydwfBackend(DwfBackend):
                 amp_steps, slew_steps = s0.value, s1.value
         except Exception:
             pass
-        return pull_supported, drive_supported, amp_min, amp_max, amp_steps, slew_steps
+        return (pull_supported, pull_bank_global, drive_supported,
+                amp_min, amp_max, amp_steps, slew_steps)
 
     def close(self) -> None:
         if self._device is not None:
@@ -597,13 +606,27 @@ class PydwfBackend(DwfBackend):
 
     def dio_pull_set(self, bit_idx: int, mode: str) -> None:
         dio = self._digital_io
-        up, down = dio.pullGet()           # read-modify-write; preserve other bits (e.g. bit 16)
+        if self._info is not None and self._info.dio_pull_bank_global:
+            # Bank-global pull (ADP2230): the device applies one pull to the whole
+            # bank, and pullGet expands any set to 0xFFFF — so per-bit read-modify-write
+            # accumulates and can't be cleared. Write the whole DIO mask explicitly.
+            full = (1 << self._info.dio_count) - 1
+            up = full if mode in ("up", "keeper") else 0
+            down = full if mode in ("down", "keeper") else 0
+            dio.pullSet(up, down)
+            return
+        up, down = dio.pullGet()           # per-pin RMW; preserve other bits (e.g. DD bit 16)
         m = 1 << bit_idx
         up &= ~m
         down &= ~m
         if mode == "up":
             up |= m
         elif mode == "down":
+            down |= m
+        elif mode == "keeper":
+            # Keeper (bus-hold) = both pull-up and pull-down asserted (WaveForms
+            # convention; verified on ADP2230: holds last driven level when released).
+            up |= m
             down |= m
         dio.pullSet(up, down)
 
