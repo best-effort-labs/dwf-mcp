@@ -15,6 +15,7 @@ from dwf_mcp.devices.configs import CONFIG_STRATEGIES
 from dwf_mcp.devices.profiles import UnsupportedDeviceError
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.instruments.awg import AWG
+from dwf_mcp.instruments.bode import Bode
 from dwf_mcp.instruments.can import CAN
 from dwf_mcp.instruments.decoder import Decoder as DecoderInstrument
 from dwf_mcp.instruments.dio import DIO
@@ -356,6 +357,7 @@ def build_app(
     app.register_instrument(Sniff)
     app.register_instrument(DecoderInstrument)
     app.register_instrument(Spectrum)
+    app.register_instrument(Bode)
     return app
 
 

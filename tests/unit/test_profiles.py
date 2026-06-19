@@ -101,3 +101,14 @@ def test_spectrum_supported_on_analog_not_on_dd() -> None:
     assert "spectrum" in resolve_profile(10).supported_instruments   # AD3
     assert "spectrum" in resolve_profile(14).supported_instruments   # ADP2230
     assert "spectrum" not in resolve_profile(4).supported_instruments  # DD (digital-only)
+
+
+def test_bode_supported_on_analog_not_on_dd() -> None:
+    from dwf_mcp.devices.profiles import _ALL_INSTRUMENTS, resolve_profile
+    assert "bode" in _ALL_INSTRUMENTS                                  # analog devices
+    assert "bode" in resolve_profile(10).supported_instruments        # AD3
+    assert "bode" in resolve_profile(14).supported_instruments        # ADP2230
+    assert "bode" not in resolve_profile(4).supported_instruments     # DD (digital-only)
+    # Bode needs an AWG; every analog profile has one.
+    assert resolve_profile(10).user_awg_count >= 1
+    assert resolve_profile(14).user_awg_count >= 1
