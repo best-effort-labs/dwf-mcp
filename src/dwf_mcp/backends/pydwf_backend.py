@@ -201,11 +201,12 @@ class PydwfBackend(DwfBackend):
         dio = device.digitalIO
         pull_bank_global = False
         try:
-            pu, _pd = dio.pullInfo()
-            pull_supported = pu != 0
-            # pullInfo is the mask of settable pull bits: one bit => a single bank-wide
-            # control (ADP2230); many bits => per-pin (Digital Discovery, pu=0x1FFFF).
-            pull_bank_global = pull_supported and bin(pu).count("1") <= 1
+            pu, pd = dio.pullInfo()
+            mask = pu | pd  # settable pull bits (union of up/down, in case asymmetric)
+            pull_supported = mask != 0
+            # one settable bit => a single bank-wide control (ADP2230); many bits =>
+            # per-pin (Digital Discovery, pullInfo=0x1FFFF).
+            pull_bank_global = pull_supported and bin(mask).count("1") <= 1
         except Exception:
             pull_supported = False
         amp_min = amp_max = 0.0
