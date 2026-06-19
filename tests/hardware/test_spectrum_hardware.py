@@ -56,10 +56,8 @@ def test_spectrum_reads_awg_tone(device, artifacts, scope_ch) -> None:
         time.sleep(0.3)  # let the AWG output settle
         spec.configure(channel=scope_ch, sample_rate_hz=1_000_000.0, buffer_size=16384,
                        window="flattop", amplitude="rms")
-        # The first AnalogIn acquisition after a device (re)open returns a stale buffer
-        # (the conftest dut_caps probe does a close->reopen); free-run measure() takes
-        # it as-is. Discard one warm-up acquisition, then measure for real.
-        spec.measure()
+        # measure() auto-discards the stale post-open AnalogIn buffer (discard_warmup
+        # defaults True), so a single call returns clean data even right after open.
         s = spec.measure()["summary"]
     finally:
         awg.stop(channel=1)

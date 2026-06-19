@@ -123,3 +123,38 @@ def test_measure_configures_all_channels_enabling_only_selected(tmp_path: Path):
     spec.measure()
     enabled = {c[1]["channel"]: c[1]["enable"] for c in be.scope_calls if c[0] == "configure"}
     assert enabled == {1: True, 2: False}  # 2-channel device: only ch1 enabled
+
+
+def _arms(be: FakeBackend) -> int:
+    return sum(1 for c in be.scope_calls if c[0] == "arm")
+
+
+def test_first_measure_after_open_flushes_stale_buffer(tmp_path: Path):
+    # The first AnalogIn acquisition after a device open is stale; measure() discards
+    # one warm-up acquisition (2 arms), but only once per open (subsequent: 1 arm).
+    d = _dev(tmp_path)
+    be: FakeBackend = d.backend  # type: ignore[assignment]
+    _canned_sine(be, 1000.0, 100_000.0, 4096)
+    spec = Spectrum(device=d, artifacts=ArtifactWriter(workspace=tmp_path))
+    spec.configure(channel=1, sample_rate_hz=100_000.0, buffer_size=4096)
+    spec.measure()
+    assert _arms(be) == 2  # warm-up + real
+    be.scope_calls.clear()
+    spec.measure()
+    assert _arms(be) == 1  # no second warm-up within the same open
+    # Reopening the device flushes again (open_count bumps).
+    d.close()
+    d.open()
+    be.scope_calls.clear()
+    spec.measure()
+    assert _arms(be) == 2
+
+
+def test_discard_warmup_false_skips_flush(tmp_path: Path):
+    d = _dev(tmp_path)
+    be: FakeBackend = d.backend  # type: ignore[assignment]
+    _canned_sine(be, 1000.0, 100_000.0, 4096)
+    spec = Spectrum(device=d, artifacts=ArtifactWriter(workspace=tmp_path))
+    spec.configure(channel=1, sample_rate_hz=100_000.0, buffer_size=4096)
+    spec.measure(discard_warmup=False)
+    assert _arms(be) == 1  # no warm-up acquisition

@@ -30,7 +30,15 @@ SPECTRUM_CONFIGURE_SCHEMA: dict[str, Any] = {
         "amplitude": {"type": "string", "enum": _AMPLITUDES, "default": "rms"},
     },
 }
-SPECTRUM_MEASURE_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
+SPECTRUM_MEASURE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        # The first AnalogIn acquisition after a device open returns a stale buffer;
+        # by default measure() flushes it with one throwaway capture (once per open).
+        # Set false only if you've already acquired since opening and want to skip it.
+        "discard_warmup": {"type": "boolean", "default": True},
+    },
+}
 SPECTRUM_TRANSFORM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["capture_path"],
@@ -57,6 +65,7 @@ class Spectrum(Instrument):
         self.device = device
         self.artifacts = artifacts
         self._config: dict[str, Any] | None = None
+        self._warmed_up_gen: int | None = None  # device.open_count we last flushed for
 
     def configure(self, channel: int, sample_rate_hz: float, buffer_size: int,
                   range_v: float = 5.0, window: str = "hann",
@@ -79,34 +88,30 @@ class Spectrum(Instrument):
                         "window": window, "averaging": averaging, "amplitude": amplitude}
         return {"configured": True, **self._config}
 
-    def measure(self, output_path: str | None = None,
-                description: str | None = None) -> dict[str, Any]:
+    def measure(self, output_path: str | None = None, description: str | None = None,
+                discard_warmup: bool = True) -> dict[str, Any]:
         if self._config is None:
             raise InstrumentNotConfigured("spectrum.configure must be called before measure")
         cfg = self._config
         ch = cfg["channel"]
         info = self.device.require_open()
         be = self.device.backend
+        n_ch = info.analog_in_channels
         # The AnalogIn engine is a single shared resource: scope_set_acquisition/arm are
         # global. Claim ALL analog-in channels under "spectrum" so measure() is mutually
         # exclusive with a live scope (or another spectrum) on ANY channel, not just `ch`.
-        all_scope_pins = [f"scope{i}" for i in range(1, info.analog_in_channels + 1)]
+        all_scope_pins = [f"scope{i}" for i in range(1, n_ch + 1)]
         self.device.allocator.claim("spectrum", all_scope_pins)
         try:
+            # The first AnalogIn acquisition after a device open returns a stale buffer
+            # (validated on the ADP2230). Flush it once per open with a throwaway capture.
+            if discard_warmup and self._warmed_up_gen != self.device.open_count:
+                self._acquire(be, ch, n_ch)
+                self._warmed_up_gen = self.device.open_count
             template: SpectrumResult | None = None
             power = None
             for _ in range(cfg["averaging"]):
-                # Configure every AnalogIn channel (enable only `ch`); the engine is
-                # global, so leaving a previously-enabled scope channel on with stale
-                # range/coupling would perturb the acquisition. Mirrors Scope.configure.
-                for c in range(1, info.analog_in_channels + 1):
-                    be.scope_configure(channel=c, range_v=cfg["range_v"], offset_v=0.0,
-                                       coupling="DC", enable=(c == ch))
-                be.scope_set_acquisition(sample_rate_hz=cfg["sample_rate_hz"],
-                                         buffer_size=cfg["buffer_size"], mode="Single")
-                be.scope_arm()
-                self._await_done()
-                samples = be.scope_read(channel=ch, count=cfg["buffer_size"])
+                samples = self._acquire(be, ch, n_ch)
                 res = compute_spectrum(samples, cfg["sample_rate_hz"],
                                        window=cfg["window"], amplitude=cfg["amplitude"])
                 if template is None:
@@ -143,6 +148,21 @@ class Spectrum(Instrument):
                "amplitude": amplitude, "source_capture": capture_path}
         return self._write(result, cfg, int(samples.size), output_path, description,
                            source="transform")
+
+    def _acquire(self, be: Any, ch: int, n_ch: int) -> np.ndarray:
+        """One AnalogIn buffer capture on `ch`. Configures every channel (enable only
+        `ch`) since the engine is global — leaving another channel enabled with stale
+        range/coupling would perturb the acquisition (mirrors Scope.configure)."""
+        assert self._config is not None
+        cfg = self._config
+        for c in range(1, n_ch + 1):
+            be.scope_configure(channel=c, range_v=cfg["range_v"], offset_v=0.0,
+                               coupling="DC", enable=(c == ch))
+        be.scope_set_acquisition(sample_rate_hz=cfg["sample_rate_hz"],
+                                 buffer_size=cfg["buffer_size"], mode="Single")
+        be.scope_arm()
+        self._await_done()
+        return np.asarray(be.scope_read(channel=ch, count=cfg["buffer_size"]))
 
     def _await_done(self) -> None:
         assert self._config is not None
