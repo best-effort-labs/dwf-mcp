@@ -1,9 +1,9 @@
-# src/dwf_mcp/spectrum_dsp.py
 """Pure DSP for the spectrum instrument — no hardware, no I/O. Unit-test target;
 also the seed for the Network/Bode analyzer's single-bin extraction."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -68,7 +68,7 @@ def compute_spectrum(
     return SpectrumResult(freq, amp, mag_dbv, sample_rate_hz, window, amplitude, rbw_hz, enbw_hz)
 
 
-def summarize_spectrum(result: SpectrumResult) -> dict:
+def summarize_spectrum(result: SpectrumResult) -> dict[str, Any]:
     freq, mag_v, mag_dbv = result.frequency_hz, result.magnitude_v, result.magnitude_dbv
     if mag_v.size == 0:
         return {

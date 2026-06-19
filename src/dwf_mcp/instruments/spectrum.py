@@ -1,4 +1,3 @@
-# src/dwf_mcp/instruments/spectrum.py
 """Spectrum (FFT) instrument. measure() drives the scope AnalogIn capture path
 directly (claims as "spectrum"); transform() FFTs an existing scope NPZ."""
 from __future__ import annotations
