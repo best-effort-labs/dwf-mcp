@@ -15,8 +15,10 @@ _FLOOR = 1e-15
 def derive_components(resistance_ohms: float, reactance_ohms: float,
                       freq_hz: float) -> dict[str, float]:
     """Series-equivalent Cs/Ls/Q/D from Z = R + jX. Capacitance only for X<0,
-    inductance only for X>0 (else NaN). Q=|X|/R, D=R/|X|, but NaN when R<=0 (a
-    passive DUT has R>=0; negative R is measurement noise) or the denominator is 0."""
+    inductance only for X>0 (else NaN, with a _FLOOR deadband so a pure resistor's
+    numerical-residue reactance reads as NaN, not a spurious component). Q=|X|/R and
+    D=R/|X| are both NaN when R<=0 (a passive DUT has R>=0; negative R is measurement
+    noise); additionally D is NaN when |X|<=_FLOOR (Q is simply 0 there)."""
     r = float(resistance_ohms)
     x = float(reactance_ohms)
     w = 2.0 * np.pi * float(freq_hz)
@@ -28,7 +30,7 @@ def derive_components(resistance_ohms: float, reactance_ohms: float,
         dissipation = nan
     else:
         q_factor = abs(x) / r
-        dissipation = r / abs(x) if x != 0.0 else nan
+        dissipation = r / abs(x) if abs(x) > _FLOOR else nan
     return {"capacitance_f": float(capacitance_f), "inductance_f": float(inductance_f),
             "q_factor": float(q_factor), "dissipation": float(dissipation)}
 

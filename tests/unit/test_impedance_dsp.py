@@ -62,6 +62,9 @@ def test_series_rc_recovers_esr_and_capacitance():
     out = impedance_point(v_total, v_dut, sr, freq, r_ref)
     assert out["resistance_ohms"] == pytest.approx(r, rel=1e-2)
     assert out["capacitance_f"] == pytest.approx(c, rel=1e-2)
+    x = -1.0 / (2 * np.pi * freq * c)        # series-cap reactance (negative)
+    assert out["q_factor"] == pytest.approx(abs(x) / r, rel=1e-2)
+    assert out["dissipation"] == pytest.approx(r / abs(x), rel=1e-2)
 
 
 def test_low_drive_guard_when_current_floored():
