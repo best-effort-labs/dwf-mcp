@@ -14,6 +14,7 @@ from dwf_mcp.impedance_dsp import impedance_point
 from dwf_mcp.instrument import InstrumentNotConfigured
 from dwf_mcp.instruments.impedance import Impedance
 from dwf_mcp.policy import SafetyPolicy
+from dwf_mcp.sweep_dsp import QF_LOW_DRIVE, QF_LOW_DUT_VOLTAGE
 
 
 def _read_two(be: FakeBackend, ref: int, dut: int, n: int):
@@ -111,3 +112,62 @@ def test_measure_before_configure_raises(tmp_path):
     imp = _impedance(tmp_path)
     with pytest.raises(InstrumentNotConfigured):
         imp.measure()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Impedance.measure() sweep orchestration + quality guards
+# ---------------------------------------------------------------------------
+
+def _sweep(be: FakeBackend, tmp_path, **cfg):
+    imp = _impedance(tmp_path, be)
+    imp.configure(**cfg)
+    out = imp.measure()
+    return out, np.load(out["path"])
+
+
+def test_measure_resistor_flat_impedance(tmp_path):
+    be = FakeBackend()
+    be.set_impedance_sim(ref_channel=1, dut_channel=2, r_ref=1000.0, model="R", r=1000.0)
+    out, npz = _sweep(be, tmp_path, start_hz=100.0, stop_hz=100_000.0, points=12,
+                      r_ref=1000.0, amplitude_v=1.0)
+    z = npz["impedance_ohms"]
+    ph = npz["phase_deg"]
+    assert np.max(np.abs(z - 1000.0)) < 5.0
+    assert np.max(np.abs(ph)) < 1.0
+    assert out["summary"]["point_count"] == 12
+
+
+def test_measure_capacitor_phase_and_C(tmp_path):
+    be = FakeBackend()
+    c = 100e-9
+    be.set_impedance_sim(ref_channel=1, dut_channel=2, r_ref=1000.0, model="C", c=c)
+    out, npz = _sweep(be, tmp_path, start_hz=500.0, stop_hz=5000.0, points=12,
+                      r_ref=1000.0, amplitude_v=1.0)
+    assert np.median(npz["phase_deg"]) == pytest.approx(-90.0, abs=3.0)
+    assert np.nanmedian(npz["capacitance_f"]) == pytest.approx(c, rel=0.05)
+
+
+def test_measure_low_dut_voltage_flag_when_Z_far_below_rref(tmp_path):
+    be = FakeBackend()
+    be.set_impedance_sim(ref_channel=1, dut_channel=2, r_ref=1_000_000.0, model="R", r=10.0)
+    out, npz = _sweep(be, tmp_path, start_hz=1000.0, stop_hz=10_000.0, points=6,
+                      r_ref=1_000_000.0, amplitude_v=1.0, min_dut_rms=0.05)
+    assert np.all((npz["quality_flags"] & QF_LOW_DUT_VOLTAGE) != 0)
+
+
+def test_measure_low_drive_flag_when_Z_far_above_rref(tmp_path):
+    be = FakeBackend()
+    be.set_impedance_sim(ref_channel=1, dut_channel=2, r_ref=1.0, model="R", r=1_000_000.0)
+    out, npz = _sweep(be, tmp_path, start_hz=1000.0, stop_hz=10_000.0, points=6,
+                      r_ref=1.0, amplitude_v=1.0, min_drive_rms=0.05)
+    assert np.all((npz["quality_flags"] & QF_LOW_DRIVE) != 0)
+
+
+def test_measure_releases_claim_and_writes_sidecar(tmp_path):
+    be = FakeBackend()
+    be.set_impedance_sim(r_ref=1000.0, model="R", r=1000.0)
+    imp = _impedance(tmp_path, be)
+    imp.configure(start_hz=100.0, stop_hz=10_000.0, points=4, r_ref=1000.0)
+    out = imp.measure()
+    assert "impedance" not in imp.device.allocator.claimed_instruments()
+    assert Path(out["sidecar_path"]).exists()
