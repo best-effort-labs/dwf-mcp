@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from dwf_mcp.allocator import PinAllocator
+from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.backends.fake import FakeBackend
+from dwf_mcp.device import DwfDevice
+from dwf_mcp.devices.ad3 import AD3_RESOURCE_GROUPS
 from dwf_mcp.impedance_dsp import impedance_point
+from dwf_mcp.instrument import InstrumentNotConfigured
+from dwf_mcp.instruments.impedance import Impedance
+from dwf_mcp.policy import SafetyPolicy
 
 
 def _read_two(be: FakeBackend, ref: int, dut: int, n: int):
@@ -53,3 +62,52 @@ def test_impedance_sim_quantization_is_applied_to_getters():
     be.scope_set_acquisition(sample_rate_hz=500_000.0, buffer_size=4096, mode="Single")
     assert be.awg_frequency_get(1) == pytest.approx(10_010.0, rel=1e-9)
     assert be.scope_sample_rate_get() == pytest.approx(499_500.0, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Impedance instrument (configure / skeleton)
+# ---------------------------------------------------------------------------
+
+def _make_device(tmp_path: Path, be: FakeBackend | None = None) -> DwfDevice:
+    dev = DwfDevice(backend=be or FakeBackend(), policy=SafetyPolicy(),
+                    allocator=PinAllocator(resource_groups=AD3_RESOURCE_GROUPS),
+                    workspace=tmp_path, idle_timeout_s=60)
+    dev.open()
+    return dev
+
+
+def _impedance(tmp_path: Path, be: FakeBackend | None = None) -> Impedance:
+    dev = _make_device(tmp_path, be)
+    return Impedance(device=dev, artifacts=ArtifactWriter(workspace=dev.workspace))
+
+
+def test_configure_requires_r_ref_positive(tmp_path):
+    imp = _impedance(tmp_path)
+    with pytest.raises(ValueError, match="r_ref"):
+        imp.configure(start_hz=100.0, stop_hz=100_000.0, points=10, r_ref=0.0)
+
+
+def test_configure_rejects_equal_channels(tmp_path):
+    imp = _impedance(tmp_path)
+    with pytest.raises(ValueError, match="differ"):
+        imp.configure(start_hz=100.0, stop_hz=100_000.0, points=10, r_ref=1000.0,
+                      ref_channel=2, dut_channel=2)
+
+
+def test_configure_rejects_bad_sweep_range(tmp_path):
+    imp = _impedance(tmp_path)
+    with pytest.raises(ValueError, match="stop_hz"):
+        imp.configure(start_hz=1000.0, stop_hz=100.0, points=10, r_ref=1000.0)
+
+
+def test_configure_returns_echo(tmp_path):
+    imp = _impedance(tmp_path)
+    out = imp.configure(start_hz=100.0, stop_hz=100_000.0, points=12, r_ref=1000.0)
+    assert out["configured"] is True
+    assert out["r_ref"] == 1000.0 and out["points"] == 12
+
+
+def test_measure_before_configure_raises(tmp_path):
+    imp = _impedance(tmp_path)
+    with pytest.raises(InstrumentNotConfigured):
+        imp.measure()
