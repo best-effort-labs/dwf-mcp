@@ -21,6 +21,7 @@ from dwf_mcp.instruments.decoder import Decoder as DecoderInstrument
 from dwf_mcp.instruments.dio import DIO
 from dwf_mcp.instruments.dmm import DMM
 from dwf_mcp.instruments.i2c import I2C
+from dwf_mcp.instruments.impedance import Impedance
 from dwf_mcp.instruments.logic import Logic
 from dwf_mcp.instruments.pattern import Pattern
 from dwf_mcp.instruments.scope import Scope
@@ -358,6 +359,7 @@ def build_app(
     app.register_instrument(DecoderInstrument)
     app.register_instrument(Spectrum)
     app.register_instrument(Bode)
+    app.register_instrument(Impedance)
     return app
 
 

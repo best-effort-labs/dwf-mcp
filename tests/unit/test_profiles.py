@@ -112,3 +112,11 @@ def test_bode_supported_on_analog_not_on_dd() -> None:
     # Bode needs an AWG; every analog profile has one.
     assert resolve_profile(10).user_awg_count >= 1
     assert resolve_profile(14).user_awg_count >= 1
+
+
+def test_impedance_is_analog_only() -> None:
+    from dwf_mcp.devices.profiles import _ALL_INSTRUMENTS, resolve_profile
+    assert "impedance" in _ALL_INSTRUMENTS                                  # analog devices
+    assert "impedance" in resolve_profile(10).supported_instruments        # AD3
+    assert "impedance" in resolve_profile(14).supported_instruments        # ADP2230
+    assert "impedance" not in resolve_profile(4).supported_instruments     # DD (digital-only)

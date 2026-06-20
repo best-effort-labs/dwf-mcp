@@ -18,7 +18,7 @@ class PinBank:
 
 _ALL_INSTRUMENTS = frozenset({
     "scope", "awg", "supply", "logic", "pattern", "dio", "dmm",
-    "i2c", "spi", "uart", "can", "sniff", "decoder", "spectrum", "bode",
+    "i2c", "spi", "uart", "can", "sniff", "decoder", "spectrum", "bode", "impedance",
 })
 
 
