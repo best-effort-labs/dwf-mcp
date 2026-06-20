@@ -360,9 +360,11 @@ class FakeBackend(DwfBackend):
         self._open_info = None
 
     def set_bode_sim(self, **kwargs: Any) -> None:
+        self._impedance_sim = None
         self._bode_sim = _BodeSim(**kwargs)
 
     def set_impedance_sim(self, **kwargs: Any) -> None:
+        self._bode_sim = None
         self._impedance_sim = _ImpedanceSim(**kwargs)
 
     # --- Supply (AnalogIO) ---

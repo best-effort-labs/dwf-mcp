@@ -186,3 +186,23 @@ def test_measure_all_floored_sweep_summary_is_json_clean(tmp_path):
     assert np.isfinite(summ["impedance_ohms_max"])
     # strict JSON (allow_nan=False) must succeed
     json.dumps(summ, allow_nan=False)
+
+
+def test_set_impedance_sim_clears_bode_sim(tmp_path):
+    # Switching a reused FakeBackend from bode sim to impedance sim must take effect
+    # (bode sim was checked first in scope_read, so a stale bode sim would mask it).
+    be = FakeBackend()
+    be.set_bode_sim(ref_channel=1, dut_channel=2, fc_hz=1000.0)
+    be.set_impedance_sim(ref_channel=1, dut_channel=2, r_ref=1000.0, model="R", r=470.0)
+    assert be._bode_sim is None
+    sr, n, freq = 1_000_000.0, 8192, 32 * 1_000_000.0 / 8192
+    be.awg_configure(channel=1, function="Sine", freq_hz=freq, amplitude_v=1.0,
+                     offset_v=0.0, phase_deg=0.0, symmetry=50.0, run_time_s=None)
+    be.awg_start(channel=1)
+    be.scope_set_acquisition(sample_rate_hz=sr, buffer_size=n, mode="Single")
+    be.scope_arm()
+    v_total = np.asarray(be.scope_read(channel=1, count=n))
+    v_dut = np.asarray(be.scope_read(channel=2, count=n))
+    out = impedance_point(v_total, v_dut, be.scope_sample_rate_get(),
+                          be.awg_frequency_get(1), 1000.0)
+    assert out["impedance_ohms"] == pytest.approx(470.0, rel=2e-3)
