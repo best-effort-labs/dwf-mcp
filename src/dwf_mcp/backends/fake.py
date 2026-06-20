@@ -26,6 +26,45 @@ class _BodeSim:
     # can't be injected via set_bode_sim(**kwargs) and doesn't affect equality.
     _armed_count: int = field(default=0, init=False, repr=False, compare=False)
 
+
+@dataclass
+class _ImpedanceSim:
+    ref_channel: int = 1            # V_total channel (CH1)
+    dut_channel: int = 2            # V_dut channel (CH2)
+    r_ref: float = 1000.0
+    model: str = "R"               # "R" | "C" | "L" | "series_rc" | "series_rl"
+    r: float = 1000.0              # ohms (R / series_rc / series_rl)
+    c: float = 1e-7                # farads (C / series_rc)
+    inductance_h: float = 1e-3    # henries (L / series_rl)
+    range_v: float = 5.0
+    freq_quantize: float = 1.0
+    rate_quantize: float = 1.0
+    dut_delay_samples: float = 0.0
+    dc_offset: float = 0.0
+    noise_std: float = 0.0
+    harmonic2: float = 0.0
+    clip: bool = False
+    transient_first: bool = False
+    _armed_count: int = field(default=0, init=False, repr=False, compare=False)
+
+    def dut_impedance(self, freq_hz: float) -> complex:
+        """Closed-form DUT impedance — written INDEPENDENTLY of impedance_dsp so the
+        forward oracle can't share a bug with the instrument's inverse recovery."""
+        w = 2.0 * np.pi * freq_hz
+        big = 1e15
+        if self.model == "R":
+            return complex(self.r, 0.0)
+        if self.model == "C":
+            return complex(0.0, -1.0 / (w * self.c)) if w > 0 else complex(0.0, -big)
+        if self.model == "L":
+            return complex(0.0, w * self.inductance_h)
+        if self.model == "series_rc":
+            return complex(self.r, -1.0 / (w * self.c)) if w > 0 else complex(self.r, -big)
+        if self.model == "series_rl":
+            return complex(self.r, w * self.inductance_h)
+        raise ValueError(f"unknown impedance dut model {self.model!r}")
+
+
 _FAKE_DEVICE = DeviceInfo(
     serial="FAKE-AD3-0001",
     model="Analog Discovery 3",
@@ -108,6 +147,8 @@ class FakeBackend(DwfBackend):
         # INDEPENDENT (but deterministic) noise — a fresh default_rng(0) per read
         # would hand ref and dut identical noise that cancels in the gain/phase ratio.
         self._bode_rng = np.random.default_rng(0)
+        self._impedance_sim: _ImpedanceSim | None = None   # set by set_impedance_sim
+        self._impedance_rng = np.random.default_rng(0)      # single held RNG (non-cancelling noise)
         # Pattern (DigitalOut) state
         self.pattern_calls: list[tuple[str, dict[str, Any]]] = []
         # DIO (DigitalIO) state
@@ -208,6 +249,8 @@ class FakeBackend(DwfBackend):
         self._scope_status_idx = 0
         if self._bode_sim is not None:
             self._bode_sim._armed_count += 1
+        if self._impedance_sim is not None:
+            self._impedance_sim._armed_count += 1
 
     def scope_status(self) -> str:
         idx = min(self._scope_status_idx, len(self._scope_status_sequence) - 1)
@@ -218,6 +261,8 @@ class FakeBackend(DwfBackend):
     def scope_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
         if self._bode_sim is not None:
             return self._bode_sim_read(channel, count)
+        if self._impedance_sim is not None:
+            return self._impedance_sim_read(channel, count)
         if channel in self._scope_canned:
             return self._scope_canned[channel][:count]
         return np.zeros(count, dtype=np.float64)
@@ -256,6 +301,37 @@ class FakeBackend(DwfBackend):
             sig = np.clip(sig, -sim.range_v, sim.range_v)
         return sig.astype(np.float64)
 
+    def _impedance_sim_read(self, channel: int, count: int) -> np.ndarray[Any, Any]:
+        sim = self._impedance_sim
+        assert sim is not None
+        f = self._awg_freq.get(self._awg_active_channel(), 0.0) * sim.freq_quantize
+        sr = self._scope_sample_rate * sim.rate_quantize
+        amp = self._awg_amp
+        nn = np.arange(count)
+        t = nn / sr if sr else nn * 0.0
+        drive = amp * np.cos(2 * np.pi * f * t)            # V_total = the AWG drive
+        if channel == sim.ref_channel:
+            sig = drive
+        elif channel == sim.dut_channel:
+            z = sim.dut_impedance(f) if f > 0 else sim.dut_impedance(1e-9)
+            h = z / (z + sim.r_ref)                          # complex divider transfer
+            g = abs(h)
+            ph = np.angle(h)
+            delay = 2 * np.pi * f * sim.dut_delay_samples / sr if sr else 0.0
+            sig = amp * g * np.cos(2 * np.pi * f * t + ph - delay)
+            if sim.harmonic2:
+                sig = sig + amp * g * sim.harmonic2 * np.cos(2 * 2 * np.pi * f * t)
+        else:
+            sig = np.zeros(count)
+        sig = sig + sim.dc_offset
+        if sim.noise_std:
+            sig = sig + self._impedance_rng.normal(0.0, sim.noise_std, count)
+        if sim.transient_first and sim._armed_count <= 1:
+            sig = sig + 5.0
+        if sim.clip:
+            sig = np.clip(sig, -sim.range_v, sim.range_v)
+        return sig.astype(np.float64)
+
     def _awg_active_channel(self) -> int:
         # Prefer the channel most recently started (robust when several AWG channels
         # were configured); fall back to the first configured channel for sim-direct
@@ -266,7 +342,11 @@ class FakeBackend(DwfBackend):
 
     def scope_sample_rate_get(self) -> float:
         sr = self._scope_sample_rate
-        return sr * self._bode_sim.rate_quantize if self._bode_sim else sr
+        if self._bode_sim:
+            return sr * self._bode_sim.rate_quantize
+        if self._impedance_sim:
+            return sr * self._impedance_sim.rate_quantize
+        return sr
 
     # Test helpers
     def set_scope_canned_data(self, channels: dict[int, np.ndarray[Any, Any]]) -> None:
@@ -281,6 +361,9 @@ class FakeBackend(DwfBackend):
 
     def set_bode_sim(self, **kwargs: Any) -> None:
         self._bode_sim = _BodeSim(**kwargs)
+
+    def set_impedance_sim(self, **kwargs: Any) -> None:
+        self._impedance_sim = _ImpedanceSim(**kwargs)
 
     # --- Supply (AnalogIO) ---
 
@@ -369,7 +452,11 @@ class FakeBackend(DwfBackend):
     def awg_frequency_get(self, channel: int) -> float:
         # Apply an optional quantization nudge so tests can exercise the noncoherent path.
         f = self._awg_freq.get(channel, 0.0)
-        return f * self._bode_sim.freq_quantize if self._bode_sim else f
+        if self._bode_sim:
+            return f * self._bode_sim.freq_quantize
+        if self._impedance_sim:
+            return f * self._impedance_sim.freq_quantize
+        return f
 
     # --- Pattern (DigitalOut) ---
 
