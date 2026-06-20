@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -171,3 +172,17 @@ def test_measure_releases_claim_and_writes_sidecar(tmp_path):
     out = imp.measure()
     assert "impedance" not in imp.device.allocator.claimed_instruments()
     assert Path(out["sidecar_path"]).exists()
+
+
+def test_measure_all_floored_sweep_summary_is_json_clean(tmp_path):
+    # Z >> R_ref everywhere makes V_total ~ V_dut -> drive floored -> |Z| all NaN.
+    # The summary must still be finite + JSON-serializable (no NaN leaking into the sidecar).
+    be = FakeBackend()
+    be.set_impedance_sim(ref_channel=1, dut_channel=2, r_ref=1e-6, model="R", r=1e9)
+    out, npz = _sweep(be, tmp_path, start_hz=1000.0, stop_hz=10_000.0, points=4,
+                      r_ref=1e-6, amplitude_v=1.0)
+    summ = out["summary"]
+    assert np.isfinite(summ["impedance_ohms_min"])
+    assert np.isfinite(summ["impedance_ohms_max"])
+    # strict JSON (allow_nan=False) must succeed
+    json.dumps(summ, allow_nan=False)

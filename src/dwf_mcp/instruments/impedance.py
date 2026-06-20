@@ -331,12 +331,13 @@ class Impedance(Instrument):
         arrays["clipping_flag"] = np.asarray(cols["clipping_flag"], dtype=np.int64)
         z = arrays["impedance_ohms"]
         freqs = arrays["frequency_hz"]
+        z_has_finite = bool(z.size) and bool(np.any(np.isfinite(z)))
         summary_extra = {
             "point_count": int(freqs.size),
             "start_hz": float(freqs[0]) if freqs.size else 0.0,
             "stop_hz": float(freqs[-1]) if freqs.size else 0.0,
-            "impedance_ohms_min": float(np.nanmin(z)) if z.size else 0.0,
-            "impedance_ohms_max": float(np.nanmax(z)) if z.size else 0.0,
+            "impedance_ohms_min": float(np.nanmin(z)) if z_has_finite else 0.0,
+            "impedance_ohms_max": float(np.nanmax(z)) if z_has_finite else 0.0,
             "flagged_points": int(np.count_nonzero(arrays["quality_flags"])),
             "clipped_points": int(np.count_nonzero(arrays["clipping_flag"])),
         }
