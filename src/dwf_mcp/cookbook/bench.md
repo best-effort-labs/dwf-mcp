@@ -31,7 +31,7 @@ tools: [waveforms.open, waveforms.status, waveforms.list_pins]
 - After an idle timeout the device handle is released; the next tool call raises `DwfDeviceLost`. Recover by calling `waveforms.open` again — instrument state is cleared, so reconfigure before measuring.
 - On the Digital Discovery (`devid 4`), `waveforms.list_pins` shows only digital pins — there are no analog-in/out entries. The analog instruments (`scope`, `awg`, `spectrum`, `bode`, `impedance`) are capability-gated out and will raise `InstrumentNotConfigured` if called.
 
----
+***
 
 ## Ground Topology
 
@@ -49,7 +49,7 @@ For Jumperless-routed signals, bridge `AD3_GND` to the Jumperless GND rail. The 
 
 The differential topology is a feature (rejects common-mode noise), but it requires the user to close the return path.
 
----
+***
 
 ## Capability Gating
 
@@ -65,7 +65,7 @@ Instruments that require both an AWG and two analog-in channels (`bode`, `impeda
 
 The `waveforms.open` return value includes `devid` and `capabilities`; check these if you are unsure whether an instrument is available on the connected device.
 
----
+***
 
 ## Pin Allocation
 
@@ -79,7 +79,7 @@ Key rules:
 
 Use `waveforms.list_pins` to inspect the current claim state. Releasing happens automatically when an instrument finishes a measurement or on `waveforms.close`.
 
----
+***
 
 ## Hardware Gotchas
 

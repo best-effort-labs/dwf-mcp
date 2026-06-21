@@ -79,7 +79,7 @@ For arbitrary waveforms:
 
 **Gotchas:**
 
-- **ADP2230:** only W1 is a user output. W2 and W3 are reported by the SDK but are internal — `awg.configure` with `channel=2` will raise `PinAllocationError` on ADP2230.
+- **ADP2230:** only W1 is a user output. W2 and W3 are reported by the SDK but are internal — `awg.configure` with `channel=2` raises `ValueError` on ADP2230 (channel exceeds `user_awg_count=1`, rejected by channel validation before any pin claim).
 - Every `awg.start` routes through `device.gate_output` and is logged to `dwf-safety.log`. If the safety policy rejects the amplitude (above `awg_max_amplitude_v` set at `waveforms.open`), a `SafetyViolation` error is returned.
 
 ---

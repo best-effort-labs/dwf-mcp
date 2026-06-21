@@ -34,7 +34,7 @@ tools: [waveforms.open, waveforms.list_pins, spectrum.configure, spectrum.measur
 
 - **THD** (total harmonic distortion): `formulae.thd(result, fundamental_hz, n_harmonics=5)` — returns `sqrt(Σ V_n²) / V_1`. Uses nearest-bin amplitudes from the `SpectrumResult`; harmonics beyond Nyquist are skipped. Status: **verified (fake-oracle; square-wave hardware confirmation pending)**.
 - **SNR**: `formulae.snr_db(result, fundamental_hz)` — returns `20·log10(V_1 / noise_rms)` where noise is the RMS of all non-DC bins excluding the ±1-bin neighborhood of the fundamental. Status: **verified (fake-oracle; square-wave hardware confirmation pending)**.
-- **Amplitude convention:** `amplitude="rms"` → a 1 V-peak AWG sine reads `peak_magnitude_dbv ≈ −3.0 dBV` (0.707 Vrms). `amplitude="peak"` → same tone reads `≈ 0 dBV`. The two differ by exactly 3.01 dB. Both modes record the convention in the sidecar so the result is self-describing.
+- **Amplitude convention:** `amplitude="rms"` → a 1 V-peak AWG sine reads `peak_magnitude_dbv ≈ −3.0 dBV` (0.707 Vrms). `amplitude="peak"` → same tone reads `≈ 0 dBV`. The two differ by 20·log10(√2) = 3.0103 dB. Both modes record the convention in the sidecar so the result is self-describing.
 - **Peak accuracy:** the `peak_frequency_hz` and `peak_magnitude_dbv` in the summary are **3-bin parabolic-interpolated** — accurate for off-bin tones, not just bin-centered ones. The per-bin `magnitude_dbv` array itself is raw (worst-case scalloping with `hann`; use `flattop` for accurate per-bin amplitude across the array).
 
 **Interpretation:**
@@ -95,7 +95,7 @@ For an RC low-pass self-test (1 kΩ + 0.1 µF, f_c ≈ 1591.5 Hz):
 
 **Gotchas:**
 
-- **Settle-before-arm:** the Bode sweep internally settles *before* arming the scope on each point. The settle time per point is `max(settle_cycles/freq, settle_min_s)`. If your DUT has a long settling tail (high-Q resonance, large time constant), increase `settle_s` (absolute seconds, overrides the cycle-count calculation).
+- **Settle-before-arm:** the Bode sweep internally settles *before* arming the scope on each point. The settle time per point is `max(settle_cycles/freq, settle_min_s)`. If your DUT has a long settling tail (high-Q resonance, large time constant), increase `settle_s` (absolute seconds; replaces the `settle_cycles/freq` term but is still floored by `settle_min_s`).
 - **Stale-first-AnalogIn-buffer:** `bode.measure` discards one warm-up acquisition at the start of the sweep.
 - **`bode` claims AWG + all scope channels** under `"bode"` for the full sweep duration. Do not interleave other scope or AWG calls.
 - **Coherent acquisition:** at each sweep point the server targets an integer number of signal cycles in the acquisition buffer (coherent capture). If the hardware cannot honor the exact rate/buffer, the achieved values may differ from the request — the point is flagged `noncoherent` if the fractional-cycle error exceeds tolerance. A few `noncoherent` points in a large sweep are normal at awkward frequencies; a sweep full of them suggests a backend configuration issue.
