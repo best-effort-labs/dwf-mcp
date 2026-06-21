@@ -425,10 +425,16 @@ def build_server(app: DwfMcpApp) -> Any:
 
     server: Server = Server("dwf-mcp", instructions=_SERVER_INSTRUCTIONS)
 
+    from dwf_mcp.tool_descriptions import TOOL_DESCRIPTIONS
+
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_tools() -> list[types.Tool]:
         return [
-            types.Tool(name=name, description="", inputSchema=app._tool_schemas[name])  # noqa: SLF001
+            types.Tool(
+                name=name,
+                description=TOOL_DESCRIPTIONS.get(name, ""),
+                inputSchema=app._tool_schemas[name],  # noqa: SLF001
+            )
             for name in app._tools  # noqa: SLF001
         ]
 
