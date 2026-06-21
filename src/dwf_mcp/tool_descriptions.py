@@ -17,8 +17,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "affecting hardware state."
     ),
     "waveforms.list_pins": (
-        "List all physical pin names for the open device grouped by subsystem; use to "
-        "discover valid pin identifiers before configuring instruments."
+        "List the open device's physical pins, current allocator claims, resource groups, "
+        "and limits; use to discover valid pin identifiers and check for conflicts before configuring."
     ),
 
     # --- AWG (analog waveform generator) ---
@@ -123,8 +123,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "configured master engine."
     ),
     "i2c.scan": (
-        "Scan all 7-bit I2C addresses and return a list of responsive devices; use to "
-        "discover peripherals on the bus."
+        "Scan all 7-bit I2C addresses and return responsive devices (requires i2c.configure "
+        "first); use to discover peripherals on the bus."
     ),
     "i2c.write": (
         "Write a byte array to an I2C peripheral at the given 7-bit address using the "
@@ -231,8 +231,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "when you need to poll status or stop early."
     ),
     "sniff.spi_status": (
-        "Poll an active SPI sniff session by sniff_id; returns running state, sample "
-        "count, and decoded chunk preview."
+        "Poll an active SPI sniff session by sniff_id; reports samples received, lost "
+        "samples, and whether the session is done (decoded frames come from sniff.spi_stop)."
     ),
     "sniff.spi_stop": (
         "Stop a running SPI sniff session and return the final decoded frames plus "
@@ -245,8 +245,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "when you need to poll status or stop early."
     ),
     "sniff.i2c_status": (
-        "Poll an active I2C sniff session by sniff_id; returns running state, transaction "
-        "count, and decoded chunk preview."
+        "Poll an active I2C sniff session by sniff_id; reports samples received, lost "
+        "samples, and whether the session is done (decoded transactions come from sniff.i2c_stop)."
     ),
     "sniff.i2c_stop": (
         "Stop a running I2C sniff session and return the final decoded transactions plus "
@@ -259,8 +259,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "when you need to poll status or stop early."
     ),
     "sniff.uart_status": (
-        "Poll an active UART sniff session by sniff_id; returns running state, frame "
-        "count, and decoded chunk preview."
+        "Poll an active UART sniff session by sniff_id; reports samples received, lost "
+        "samples, and whether the session is done (decoded frames come from sniff.uart_stop)."
     ),
     "sniff.uart_stop": (
         "Stop a running UART sniff session and return the final decoded frames plus "
@@ -273,8 +273,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "when you need to poll status or stop early."
     ),
     "sniff.can_status": (
-        "Poll an active CAN sniff session by sniff_id; returns running state, frame "
-        "count, and decoded chunk preview."
+        "Poll an active CAN sniff session by sniff_id; reports samples received, lost "
+        "samples, and whether the session is done (decoded frames come from sniff.can_stop)."
     ),
     "sniff.can_stop": (
         "Stop a running CAN sniff session and return the final decoded frames plus "
@@ -292,7 +292,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "spectrum.transform": (
         "Compute an FFT spectrum from an existing scope capture NPZ artifact without "
-        "re-acquiring; use to re-analyze a prior waveform with different window/averaging."
+        "re-acquiring; use to re-analyze a prior waveform with a different window function."
     ),
 
     # --- SPI active master ---
