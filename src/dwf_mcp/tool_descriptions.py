@@ -18,7 +18,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "waveforms.list_pins": (
         "List the open device's physical pins, current allocator claims, resource groups, "
-        "and limits; use to discover valid pin identifiers and check for conflicts before configuring."
+        "and limits; use to discover valid pin identifiers and check for conflicts."
     ),
 
     # --- AWG (analog waveform generator) ---
