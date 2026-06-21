@@ -363,22 +363,14 @@ def build_app(
     return app
 
 
-def main() -> None:
-    """Stdio MCP transport entry point. Wires DwfMcpApp into the mcp SDK."""
+def build_server(app: DwfMcpApp) -> Any:
+    """Construct and return the MCP Server with all handlers registered."""
     import base64
     import json as _json
-    logging.basicConfig(level=logging.INFO)
+
     from mcp import types  # imported lazily
     from mcp.server import Server
-    from mcp.server.stdio import stdio_server
 
-    _vcd_env = os.environ.get("DWF_ENABLE_VCD")
-    _enable_vcd: bool | None = None
-    if _vcd_env == "1":
-        _enable_vcd = True
-    elif _vcd_env == "0":
-        _enable_vcd = False
-    app = build_app(enable_vcd=_enable_vcd)
     server: Server = Server("dwf-mcp")
 
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
@@ -408,6 +400,23 @@ def main() -> None:
             )
 
         return await app.call_tool(name, arguments, on_record_chunk=on_chunk)
+
+    return server
+
+
+def main() -> None:
+    """Stdio MCP transport entry point. Wires DwfMcpApp into the mcp SDK."""
+    logging.basicConfig(level=logging.INFO)
+    from mcp.server.stdio import stdio_server
+
+    _vcd_env = os.environ.get("DWF_ENABLE_VCD")
+    _enable_vcd: bool | None = None
+    if _vcd_env == "1":
+        _enable_vcd = True
+    elif _vcd_env == "0":
+        _enable_vcd = False
+    app = build_app(enable_vcd=_enable_vcd)
+    server = build_server(app)
 
     async def _run() -> None:
         async with stdio_server() as (reader, writer):
