@@ -29,6 +29,33 @@ from dwf_mcp.sweep_dsp import (  # noqa: F401  (re-exported for back-compat)
     plan_acquisition,
 )
 
+# Explicit re-export (mypy strict no_implicit_reexport): names pulled from sweep_dsp
+# above are part of this module's public surface for back-compat call sites.
+__all__ = [
+    "COHERENCE_TOL_CYCLES",
+    "QF_BUFFER_LIMITED",
+    "QF_CLIPPED",
+    "QF_LOW_CYCLES",
+    "QF_LOW_DRIVE",
+    "QF_LOW_DUT_VOLTAGE",
+    "QF_LOW_OVERSAMPLING",
+    "QF_LOW_SAMPLES_PER_CYCLE",
+    "QF_LOW_VIN_RMS",
+    "QF_NAMES",
+    "QF_NEAR_NYQUIST",
+    "QF_NONCOHERENT",
+    "QF_REF_MISMATCH",
+    "QF_SAMPLE_RATE_LIMITED",
+    "QF_VERY_LOW_SAMPLES_PER_CYCLE",
+    "AcqPlan",
+    "assess_quality",
+    "detect_clip",
+    "extract_tone",
+    "frequency_grid",
+    "plan_acquisition",
+    "bode_point",
+]
+
 _FLOOR = 1e-15
 
 

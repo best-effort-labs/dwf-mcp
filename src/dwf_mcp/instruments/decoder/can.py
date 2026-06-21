@@ -64,7 +64,7 @@ class CanDecoder(Decoder):
     # 200 bit-times is comfortably above the maximum.
     _WORST_CASE_FRAME_BITS: ClassVar[int] = 200
 
-    def init(  # type: ignore[override]
+    def init(
         self,
         pin_map: dict[str, int],
         sample_rate_hz: float,
@@ -91,7 +91,7 @@ class CanDecoder(Decoder):
         self._consumed_total = 0
         self._carry = np.zeros(0, dtype=np.uint8)
 
-    def feed(self, samples: np.ndarray) -> list[CanFrame]:  # type: ignore[override]
+    def feed(self, samples: np.ndarray) -> list[CanFrame]:
         chunk_rx = samples[:, self._rx_col].astype(np.uint8)
         if len(self._carry):
             rx = np.concatenate([self._carry, chunk_rx])
@@ -102,7 +102,7 @@ class CanDecoder(Decoder):
         self._carry = rx[consumed:].copy()
         return frames
 
-    def finalize(self) -> list[CanFrame]:  # type: ignore[override]
+    def finalize(self) -> list[CanFrame]:
         # No more samples coming — make a best-effort decode of anything
         # still in the carry, treating OOB sample positions as recessive
         # (which is how the pre-streaming one-shot decode behaved at the

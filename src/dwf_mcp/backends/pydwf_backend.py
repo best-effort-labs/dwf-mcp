@@ -480,7 +480,7 @@ class PydwfBackend(DwfBackend):
         amplitude_v: float, offset_v: float, phase_deg: float,
         symmetry: float, run_time_s: float | None,
     ) -> None:
-        from pydwf import DwfAnalogOutFunction, DwfAnalogOutNode  # type: ignore[import-untyped]
+        from pydwf import DwfAnalogOutFunction, DwfAnalogOutNode
         ch_idx = channel - 1
         ao = self._analog_out
         node = DwfAnalogOutNode.Carrier
@@ -506,7 +506,7 @@ class PydwfBackend(DwfBackend):
         ao.configure(ch_idx, False)
 
     def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
-        from pydwf import DwfAnalogOutNode  # type: ignore[import-untyped]
+        from pydwf import DwfAnalogOutNode
         ch_idx = channel - 1
         ao = self._analog_out
         node = DwfAnalogOutNode.Carrier
@@ -521,7 +521,7 @@ class PydwfBackend(DwfBackend):
         self._analog_out.configure(channel - 1, False)
 
     def awg_frequency_get(self, channel: int) -> float:
-        from pydwf import DwfAnalogOutNode  # type: ignore[import-untyped]
+        from pydwf import DwfAnalogOutNode
         return float(self._analog_out.nodeFrequencyGet(channel - 1, DwfAnalogOutNode.Carrier))
 
     # --- Pattern (DigitalOut) -----------------------------------------------
@@ -536,7 +536,7 @@ class PydwfBackend(DwfBackend):
         self, bit_idx: int, function: str, freq_hz: float,
         duty: float, idle_state: str,
     ) -> None:
-        from pydwf import (  # type: ignore[import-untyped]
+        from pydwf import (
             DwfDigitalOutIdle,
             DwfDigitalOutType,
         )
@@ -672,7 +672,7 @@ class PydwfBackend(DwfBackend):
     def logic_configure(
         self, pin_mask: int, sample_rate_hz: float, buffer_size: int
     ) -> None:
-        from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
+        from pydwf import DwfAcquisitionMode
         din = self._digital_in
         clock = float(din.internalClockInfo())
         divider = max(1, round(clock / sample_rate_hz))
@@ -687,7 +687,7 @@ class PydwfBackend(DwfBackend):
         self, source: str, pin_idx: int | None, level: float | None,
         condition: str | None, position_s: float | None, timeout_s: float | None,
     ) -> None:
-        from pydwf import DwfTriggerSource  # type: ignore[import-untyped]
+        from pydwf import DwfTriggerSource
         din = self._digital_in
         src_map = {
             "none":                 DwfTriggerSource.None_,
@@ -705,7 +705,7 @@ class PydwfBackend(DwfBackend):
         self._digital_in.configure(False, True)
 
     def logic_status(self) -> str:
-        from pydwf import DwfState  # type: ignore[import-untyped]
+        from pydwf import DwfState
         st = self._digital_in.status(True)
         if st == DwfState.Done:
             return "Done"
@@ -730,7 +730,7 @@ class PydwfBackend(DwfBackend):
     def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
         import time
 
-        from pydwf import DwfAcquisitionMode  # type: ignore[import-untyped]
+        from pydwf import DwfAcquisitionMode
         din = self._digital_in
         clock = float(din.internalClockInfo())
         divider = max(1, round(clock / sample_rate_hz))

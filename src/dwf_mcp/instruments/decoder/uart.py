@@ -37,7 +37,7 @@ class UartDecoder(Decoder):
 
     protocol_name: ClassVar[str] = "uart"
 
-    def init(  # type: ignore[override]
+    def init(
         self,
         pin_map: dict[str, int],
         sample_rate_hz: float,
@@ -84,7 +84,7 @@ class UartDecoder(Decoder):
         self._consumed_total = 0  # absolute index of self._carry[0]
         self._carry = np.zeros(0, dtype=np.uint8)
 
-    def feed(self, samples: np.ndarray) -> list[UartFrame]:  # type: ignore[override]
+    def feed(self, samples: np.ndarray) -> list[UartFrame]:
         chunk_rx = samples[:, self._rx_col].astype(np.uint8)
         if self._polarity == 1:
             chunk_rx = 1 - chunk_rx
@@ -99,7 +99,7 @@ class UartDecoder(Decoder):
         self._carry = working[consumed:].copy()  # detach from working
         return frames
 
-    def finalize(self) -> list[UartFrame]:  # type: ignore[override]
+    def finalize(self) -> list[UartFrame]:
         # Any samples still in self._carry didn't form a complete frame.
         # Drop them; partial UART frames at end-of-stream are not emitted.
         self._carry = np.zeros(0, dtype=np.uint8)

@@ -38,7 +38,7 @@ class I2cDecoder(Decoder):
 
     protocol_name: ClassVar[str] = "i2c"
 
-    def init(  # type: ignore[override]
+    def init(
         self,
         pin_map: dict[str, int],
         sample_rate_hz: float,
@@ -70,7 +70,7 @@ class I2cDecoder(Decoder):
         # Position tracking.
         self._consumed_total = 0
 
-    def feed(self, samples: np.ndarray) -> list[I2cTransaction]:  # type: ignore[override]
+    def feed(self, samples: np.ndarray) -> list[I2cTransaction]:
         sda = samples[:, self._sda_col].astype(np.int8)
         scl = samples[:, self._scl_col].astype(np.int8)
         n = len(sda)
@@ -129,7 +129,7 @@ class I2cDecoder(Decoder):
         self._prev_scl = int(scl[-1])
         return out
 
-    def finalize(self) -> list[I2cTransaction]:  # type: ignore[override]
+    def finalize(self) -> list[I2cTransaction]:
         # If we ended mid-transaction (no STOP seen), drop the partial state.
         # Emitting a half-decoded transaction would confuse callers more than
         # silently dropping it.
