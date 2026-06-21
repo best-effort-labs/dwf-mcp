@@ -313,6 +313,44 @@ class DwfMcpApp:
         }
 
 
+_COOKBOOK_URI_PREFIX = "dwf://cookbook/"
+
+
+def cookbook_resource_handlers() -> tuple[Any, Any]:
+    """Return (list_fn, read_fn) for cookbook resources, independent of MCP SDK URL
+    types so they are unit-testable. list_fn() -> list[types.Resource];
+    read_fn(uri_str) -> markdown."""
+    from dwf_mcp import cookbook
+
+    _titles = {
+        "index": "Cookbook index — intent → tool/recipe",
+        "freq-domain": "Frequency-domain recipes (spectrum/bode/impedance)",
+        "time-domain": "Time-domain recipes (scope/awg/supply/dmm/dio/logic/pattern)",
+        "protocols": "Protocol recipes (i2c/spi/uart/can)",
+        "bench": "Bench reference (wiring/gating/gotchas)",
+    }
+
+    async def list_fn() -> list[Any]:
+        from mcp import types
+        return [
+            types.Resource(
+                uri=f"{_COOKBOOK_URI_PREFIX}{n}",  # type: ignore[arg-type]
+                name=n,
+                description=_titles[n],
+                mimeType="text/markdown",
+            )
+            for n in cookbook.doc_names()
+        ]
+
+    async def read_fn(uri_str: str) -> str:
+        if not uri_str.startswith(_COOKBOOK_URI_PREFIX):
+            raise ValueError(f"not a cookbook resource: {uri_str}")
+        name = uri_str[len(_COOKBOOK_URI_PREFIX):]
+        return cookbook.read_doc(name)  # KeyError on unknown
+
+    return list_fn, read_fn
+
+
 def build_app(
     backend_name: str | None = None,
     workspace: str | None = None,
@@ -400,6 +438,16 @@ def build_server(app: DwfMcpApp) -> Any:
             )
 
         return await app.call_tool(name, arguments, on_record_chunk=on_chunk)
+
+    _cb_list, _cb_read = cookbook_resource_handlers()
+
+    @server.list_resources()  # type: ignore[no-untyped-call,untyped-decorator]
+    async def _list_resources() -> list[types.Resource]:
+        return cast(list[types.Resource], await _cb_list())
+
+    @server.read_resource()  # type: ignore[no-untyped-call,untyped-decorator]
+    async def _read_resource(uri: Any) -> str:
+        return cast(str, await _cb_read(str(uri)))
 
     return server
 
