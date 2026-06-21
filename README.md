@@ -69,7 +69,7 @@ Speaks MCP over stdio. Configure your LLM client (Claude Desktop, Claude Code, e
 | `DWF_WORKSPACE` | (cwd) | Workspace directory. Capture artifacts (`.npz`, `.parquet`, `.vcd`) are written under `<workspace>/captures/`. If unset, falls back to the current working directory — useful to pin to `/tmp/dwf` when launched from an MCP client that has an arbitrary cwd. |
 | `DWF_ENABLE_VCD` | (autodetect) | Set to `1` to force VCD output writer on (requires `pip install dwf-mcp[vcd]`), `0` to disable. Default: enabled if `pyvcd` importable. |
 
-## Tool surface (66 tools)
+## Tool surface (75 tools)
 
 | Group | Tools |
 |---|---|
@@ -276,6 +276,23 @@ The server tracks `_last_activity` per tool call and closes the device after `id
 - [docs/troubleshooting.md](docs/troubleshooting.md) — known limitations
   (including device unplug), Linux/VM hardware-setup gotchas, safety-policy
   behavior, the sniff memory cap, and a common-error table.
+
+### Measurement cookbook
+
+The measurement cookbook lives at `src/dwf_mcp/cookbook/` and is served as MCP
+resources at runtime:
+
+| Resource URI | Contents |
+|---|---|
+| `dwf://cookbook/index` | Overview, quick-start, and navigation |
+| `dwf://cookbook/freq-domain` | Spectrum, Bode, impedance recipes |
+| `dwf://cookbook/time-domain` | Scope capture, THD, SNR recipes |
+| `dwf://cookbook/protocols` | I2C, SPI, UART, CAN recipes |
+| `dwf://cookbook/bench` | Power supply, DMM, pattern-gen recipes |
+
+The server's MCP instructions pointer directs agents to `dwf://cookbook/index`
+as the recommended starting point before calling any measurement tool. Agents
+that load the index discover the other recipe documents on demand.
 
 ## Architecture
 
