@@ -313,6 +313,20 @@ class DwfMcpApp:
         }
 
 
+_SERVER_INSTRUCTIONS = (
+    "dwf-mcp drives a Digilent WaveForms device (scope, AWG, supply, logic, "
+    "protocol engines, and a spectrum/bode/impedance analyzer trio).\n\n"
+    "MEASUREMENT COOKBOOK: this server ships a recipe cookbook. To pick the right "
+    "tool + settings + wiring for a measurement, first read the resource "
+    "`dwf://cookbook/index` (intent -> recipe), then the matching domain resource "
+    "(`dwf://cookbook/{freq-domain,time-domain,protocols,bench}`).\n\n"
+    "GLOBAL GOTCHAS: (1) Free-run/sweep paths must SETTLE BEFORE arming the scope "
+    "(scope_arm starts the acquisition). (2) The first AnalogIn acquisition after a "
+    "device open returns a stale buffer — discard one warm-up read on free-run paths. "
+    "(3) For routed/differential measurements, bridge the device GND to the signal "
+    "ground and tie CH_NEG inputs to GND."
+)
+
 _COOKBOOK_URI_PREFIX = "dwf://cookbook/"
 
 
@@ -409,7 +423,7 @@ def build_server(app: DwfMcpApp) -> Any:
     from mcp import types  # imported lazily
     from mcp.server import Server
 
-    server: Server = Server("dwf-mcp")
+    server: Server = Server("dwf-mcp", instructions=_SERVER_INSTRUCTIONS)
 
     @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_tools() -> list[types.Tool]:
