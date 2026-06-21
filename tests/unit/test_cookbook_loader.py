@@ -46,4 +46,6 @@ def test_parse_front_matter_absent_returns_empty():
 
 def test_recipe_tool_names_scans_all_docs():
     names = cookbook.recipe_tool_names()
-    assert isinstance(names, set)
+    # Skeletons carry no recipe front matter yet; this also guards against the function
+    # crashing/returning None, and will fail loudly (as a reminder) once recipes land.
+    assert names == set()

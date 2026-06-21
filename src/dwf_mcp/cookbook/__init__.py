@@ -23,7 +23,7 @@ def parse_front_matter(markdown: str) -> tuple[dict[str, Any], str]:
     """Split a leading `---`...`---` YAML-ish block from the body. Only `key: value`
     and `key: [a, b]` lists are understood (no nested structures). Returns ({}, text)
     when there is no front matter."""
-    text = markdown.lstrip("﻿")
+    text = markdown.removeprefix("﻿")
     if not text.startswith("---"):
         return {}, markdown
     lines = text.splitlines()
@@ -52,7 +52,11 @@ def parse_front_matter(markdown: str) -> tuple[dict[str, Any], str]:
 def recipe_tool_names() -> set[str]:
     """Every tool name referenced in any recipe's `tools:` front matter, across all
     docs. Scans each doc for `---`-fenced front-matter blocks (document- or
-    recipe-level) and unions their `tools:` lists."""
+    recipe-level) and unions their `tools:` lists.
+
+    Constraint: recipe *bodies* must not use a bare `---` Markdown thematic break —
+    fence-pairing treats every `---` line as a front-matter delimiter, so a stray one
+    would mis-pair the blocks. Use `***` or `___` for a horizontal rule in recipe prose."""
     names: set[str] = set()
     for name in _DOC_NAMES:
         text = read_doc(name)
