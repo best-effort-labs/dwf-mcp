@@ -45,7 +45,7 @@ def test_parse_front_matter_absent_returns_empty():
 
 
 def test_recipe_tool_names_scans_all_docs():
+    from dwf_mcp.server import build_app
     names = cookbook.recipe_tool_names()
-    # Skeletons carry no recipe front matter yet; this also guards against the function
-    # crashing/returning None, and will fail loudly (as a reminder) once recipes land.
-    assert names == set()
+    assert names, "recipes should reference some tools now"
+    assert names <= set(build_app(backend_name="fake")._tools)
