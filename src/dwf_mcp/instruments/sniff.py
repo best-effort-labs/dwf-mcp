@@ -227,6 +227,23 @@ class Sniff(Instrument):
         reap_completed_sessions(self._spi_sessions, self.device)
         reap_completed_sessions(self._async_sessions, self.device)
 
+    def _session_status(
+        self, store: dict[str, _AsyncSniffSession], sniff_id: str
+    ) -> dict[str, Any]:
+        """Shared poll for every async observe-mode sniff: reap finished sessions,
+        look up ``sniff_id`` in its store, and report sample counts + done. (The
+        decoded transactions/frames come from the corresponding ``*_stop``.)"""
+        reap_completed_sessions(store, self.device)
+        session = store.get(sniff_id)
+        if session is None:
+            raise ValueError(f"unknown sniff_id {sniff_id!r}")
+        rs = session.record_session
+        return {
+            "samples_received": rs.samples_received,
+            "lost_samples": rs.lost_samples,
+            "done": rs.done,
+        }
+
     # --- sniff.i2c ---
 
     async def i2c(
@@ -514,17 +531,7 @@ class Sniff(Instrument):
         return {"sniff_id": sniff_id}
 
     def spi_status(self, sniff_id: str) -> dict[str, Any]:
-        reap_completed_sessions(self._spi_sessions, self.device)
-        session = self._spi_sessions.get(sniff_id)
-        if session is None:
-            raise ValueError(f"unknown sniff_id {sniff_id!r}")
-        r = session.record_session
-        total_samples = r.samples_received
-        return {
-            "samples_received": total_samples,
-            "lost_samples": r.lost_samples,
-            "done": r.done,
-        }
+        return self._session_status(self._spi_sessions, sniff_id)
 
     async def spi_stop(self, sniff_id: str) -> dict[str, Any]:
         session = self._spi_sessions.pop(sniff_id, None)
@@ -641,17 +648,7 @@ class Sniff(Instrument):
         return {"sniff_id": sniff_id}
 
     def i2c_status(self, sniff_id: str) -> dict[str, Any]:
-        reap_completed_sessions(self._async_sessions, self.device)
-        session = self._async_sessions.get(sniff_id)
-        if session is None:
-            raise ValueError(f"unknown sniff_id {sniff_id!r}")
-        rs = session.record_session
-        total = rs.samples_received
-        return {
-            "samples_received": total,
-            "lost_samples": rs.lost_samples,
-            "done": rs.done,
-        }
+        return self._session_status(self._async_sessions, sniff_id)
 
     async def i2c_stop(self, sniff_id: str) -> dict[str, Any]:
         session = self._async_sessions.pop(sniff_id, None)
@@ -778,17 +775,7 @@ class Sniff(Instrument):
         return {"sniff_id": sniff_id}
 
     def uart_status(self, sniff_id: str) -> dict[str, Any]:
-        reap_completed_sessions(self._async_sessions, self.device)
-        session = self._async_sessions.get(sniff_id)
-        if session is None:
-            raise ValueError(f"unknown sniff_id {sniff_id!r}")
-        rs = session.record_session
-        total = rs.samples_received
-        return {
-            "samples_received": total,
-            "lost_samples": rs.lost_samples,
-            "done": rs.done,
-        }
+        return self._session_status(self._async_sessions, sniff_id)
 
     async def uart_stop(self, sniff_id: str) -> dict[str, Any]:
         session = self._async_sessions.pop(sniff_id, None)
@@ -902,17 +889,7 @@ class Sniff(Instrument):
         return {"sniff_id": sniff_id}
 
     def can_status(self, sniff_id: str) -> dict[str, Any]:
-        reap_completed_sessions(self._async_sessions, self.device)
-        session = self._async_sessions.get(sniff_id)
-        if session is None:
-            raise ValueError(f"unknown sniff_id {sniff_id!r}")
-        rs = session.record_session
-        total = rs.samples_received
-        return {
-            "samples_received": total,
-            "lost_samples": rs.lost_samples,
-            "done": rs.done,
-        }
+        return self._session_status(self._async_sessions, sniff_id)
 
     async def can_stop(self, sniff_id: str) -> dict[str, Any]:
         session = self._async_sessions.pop(sniff_id, None)
