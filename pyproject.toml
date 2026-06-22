@@ -53,3 +53,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 strict = true
+
+# pydwf ships no type stubs / py.typed marker — don't flag its imports as untyped.
+[[tool.mypy.overrides]]
+module = "pydwf.*"
+ignore_missing_imports = true

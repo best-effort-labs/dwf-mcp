@@ -88,10 +88,7 @@ class UartDecoder(Decoder):
         chunk_rx = samples[:, self._rx_col].astype(np.uint8)
         if self._polarity == 1:
             chunk_rx = 1 - chunk_rx
-        if len(self._carry):
-            working = np.concatenate([self._carry, chunk_rx])
-        else:
-            working = chunk_rx
+        working = np.concatenate([self._carry, chunk_rx]) if len(self._carry) else chunk_rx
         frames, consumed = self._scan(working)
         # consumed samples are now permanently behind us; advance the
         # offset and keep only the tail as carry.

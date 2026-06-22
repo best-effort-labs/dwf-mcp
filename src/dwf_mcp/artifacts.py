@@ -84,7 +84,7 @@ class ArtifactWriter:
         # Empty table has no column schema; callers should not attempt to
         # concatenate empty and non-empty parquet files from the same instrument.
         table = pa.Table.from_pylist(records) if records else pa.table({})
-        pq.write_table(table, output_path)
+        pq.write_table(table, output_path)  # type: ignore[no-untyped-call]  # pyarrow untyped
 
         sidecar_path = output_path.with_suffix(".json")
         sidecar = {

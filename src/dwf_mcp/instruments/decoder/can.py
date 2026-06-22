@@ -93,10 +93,7 @@ class CanDecoder(Decoder):
 
     def feed(self, samples: np.ndarray) -> list[CanFrame]:
         chunk_rx = samples[:, self._rx_col].astype(np.uint8)
-        if len(self._carry):
-            rx = np.concatenate([self._carry, chunk_rx])
-        else:
-            rx = chunk_rx
+        rx = np.concatenate([self._carry, chunk_rx]) if len(self._carry) else chunk_rx
         frames, consumed = self._scan(rx)
         self._consumed_total += consumed
         self._carry = rx[consumed:].copy()

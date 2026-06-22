@@ -348,10 +348,8 @@ class Scope(Instrument):
         except Exception:
             if session.task is not None:
                 session.task.cancel()
-            try:
+            with suppress(Exception):
                 self.device.backend.scope_record_stop()
-            except Exception:
-                pass
             self.device.allocator.release("scope")
             raise
 
@@ -421,12 +419,15 @@ class Scope(Instrument):
                     all_raw = np.concatenate(session.chunks, axis=0)
                     # scope_record_read always returns shape (N, 2); slice to configured channels.
                     ch_indices = [c - 1 for c in channels]
-                    arrays = {f"ch{c}": all_raw[:, i] for i, c in zip(ch_indices, channels)}
+                    arrays = {
+                        f"ch{c}": all_raw[:, i]
+                        for i, c in zip(ch_indices, channels, strict=False)
+                    }
                     summary_per_ch = {
                         f"ch{c}": self._summarize(
                             all_raw[:, i], session.meta["sample_rate_hz"]
                         )
-                        for i, c in zip(ch_indices, channels)
+                        for i, c in zip(ch_indices, channels, strict=False)
                     }
                     summary = CaptureSummary(
                         instrument="scope",

@@ -82,7 +82,9 @@ class AWG(Instrument):
         run_time_s: float | None = None,
     ) -> dict[str, Any]:
         if function not in _VALID_FUNCTIONS:
-            raise ValueError(f"function must be one of {sorted(_VALID_FUNCTIONS)}, got {function!r}")
+            raise ValueError(
+                f"function must be one of {sorted(_VALID_FUNCTIONS)}, got {function!r}"
+            )
         self.device.validate_channel(channel, "awg")
         pin = _CHANNEL_TO_PIN[channel]
         # Reconfiguring a running channel applies the new amplitude to live
@@ -169,9 +171,12 @@ class AWG(Instrument):
         self.device.validate_channel(channel, "awg")
         if channel not in self._configured_channels:
             raise InstrumentNotConfigured(
-                f"awg.configure or awg.upload_custom must be called for channel {channel} before start"
+                f"awg.configure or awg.upload_custom must be called for channel "
+                f"{channel} before start"
             )
-        self.device.gate_output("awg_start", channel=channel, amplitude=self._amplitude.get(channel, 0.0))
+        self.device.gate_output(
+            "awg_start", channel=channel, amplitude=self._amplitude.get(channel, 0.0)
+        )
         self.device.backend.awg_start(channel=channel)
         self._running_channels.add(channel)
         return {"started": True, "channel": channel}

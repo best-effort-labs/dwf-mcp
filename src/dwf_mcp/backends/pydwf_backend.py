@@ -17,11 +17,11 @@ import ctypes
 import logging
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any
 
 import numpy as np
-from pydwf import (  # type: ignore[import-untyped]
+from pydwf import (
     DwfAcquisitionMode,
     DwfAnalogCoupling,
     DwfAnalogOutNode,
@@ -543,7 +543,8 @@ class PydwfBackend(DwfBackend):
         dout = self._digital_out
         type_map = {
             "Pulse":  DwfDigitalOutType.Pulse,
-            "Clock":  DwfDigitalOutType.Pulse,  # pydwf has no Clock type; Pulse generates a periodic waveform
+            # pydwf has no Clock type; Pulse generates a periodic waveform
+            "Clock":  DwfDigitalOutType.Pulse,
             "Random": DwfDigitalOutType.Random,
             "Custom": DwfDigitalOutType.Custom,
         }
@@ -581,19 +582,13 @@ class PydwfBackend(DwfBackend):
     def dio_set_direction(self, bit_idx: int, output: bool) -> None:
         dio = self._digital_io
         current_mask = int(dio.outputEnableGet())
-        if output:
-            new_mask = current_mask | (1 << bit_idx)
-        else:
-            new_mask = current_mask & ~(1 << bit_idx)
+        new_mask = current_mask | 1 << bit_idx if output else current_mask & ~(1 << bit_idx)
         dio.outputEnableSet(new_mask)
 
     def dio_set(self, bit_idx: int, state: bool) -> None:
         dio = self._digital_io
         current_out = int(dio.outputGet())
-        if state:
-            new_out = current_out | (1 << bit_idx)
-        else:
-            new_out = current_out & ~(1 << bit_idx)
+        new_out = current_out | 1 << bit_idx if state else current_out & ~(1 << bit_idx)
         dio.outputSet(new_out)
 
     def dio_read(self, bit_idx: int) -> bool:
@@ -727,7 +722,9 @@ class PydwfBackend(DwfBackend):
 
     # --- Logic record-mode (DigitalIn streaming) ----------------------------
 
-    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
+    def logic_record_configure(
+        self, pin_mask: int, sample_rate_hz: float, duration_s: float
+    ) -> None:
         import time
 
         from pydwf import DwfAcquisitionMode
@@ -805,10 +802,8 @@ class PydwfBackend(DwfBackend):
         )
 
     def dmm_stop(self) -> None:
-        try:
+        with suppress(Exception):
             self._analog_in.configure(False, False)
-        except Exception:
-            pass
 
     # --- SPI (ProtocolSPI) ----------------------------------------------------
 

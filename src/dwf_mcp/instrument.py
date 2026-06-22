@@ -23,7 +23,7 @@ class Instrument(ABC):
     @abstractmethod
     def release(self) -> None: ...
 
-    def tick_idle(self) -> None:
+    def tick_idle(self) -> None:  # noqa: B027  (intentional optional no-op hook, not abstract)
         """Optional per-tool-call hook to reap idle/background state (e.g. orphan
         sniff sessions whose owner never called *_stop). Default no-op; the server
         calls this on every tool dispatch for each live instrument."""

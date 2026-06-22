@@ -55,7 +55,9 @@ class Pattern(Instrument):
     ) -> dict[str, Any]:
         self.device.validate_output_pin(pin)
         if function not in _VALID_FUNCTIONS:
-            raise ValueError(f"function must be one of {sorted(_VALID_FUNCTIONS)}, got {function!r}")
+            raise ValueError(
+                f"function must be one of {sorted(_VALID_FUNCTIONS)}, got {function!r}"
+            )
         if idle_state not in _VALID_IDLE:
             raise ValueError(f"idle_state must be one of {sorted(_VALID_IDLE)}, got {idle_state!r}")
         assert self.device.inventory is not None  # guaranteed by validate_output_pin

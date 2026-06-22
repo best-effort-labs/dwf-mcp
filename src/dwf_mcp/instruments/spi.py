@@ -7,7 +7,6 @@ from dwf_mcp.device import DwfDevice
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
 from dwf_mcp.pin_utils import dio_index as _dio_index
 
-
 SPI_CONFIGURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["clk_pin", "frequency_hz", "mode"],

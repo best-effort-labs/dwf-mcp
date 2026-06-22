@@ -56,7 +56,8 @@ SNIFF_UART_SCHEMA: dict[str, Any] = {
         "parity": {"type": "string", "enum": ["none", "odd", "even"], "default": "none"},
         "stop_bits": {"type": "integer", "enum": [1, 2], "default": 1},
         "polarity": {"type": "integer", "enum": [0, 1], "default": 0,
-                     "description": "pydwf protocol.uart.polaritySet value; 0 = standard TTL (idle HIGH); 1 = inverted"},
+                     "description": "pydwf protocol.uart.polaritySet value; "
+                                    "0 = standard TTL (idle HIGH); 1 = inverted"},
         "poll_interval_s": {"type": "number", "default": 0.010},
         "output_path": {"type": "string"},
     },

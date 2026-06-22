@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 
 
 class PinAllocationError(Exception):
-    """Raised when an instrument tries to claim pins already in use, or a resource group conflict."""
+    """Raised when an instrument tries to claim pins already in use, or on a resource
+    group conflict."""
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,8 @@ class PinAllocator:
     """
     resource_groups: list[ResourceGroup] = field(default_factory=list)
     _claims: dict[str, list[str]] = field(default_factory=dict)
-    _observe_claims: set[str] = field(default_factory=set)  # instruments with DigitalIn observer claim
+    # instruments holding a DigitalIn observer claim
+    _observe_claims: set[str] = field(default_factory=set)
     _known_pins: set[str] | None = field(default=None)  # None = unconfigured (permissive)
 
     def configure(self, known_pins: set[str], resource_groups: list[ResourceGroup]) -> None:
@@ -91,7 +93,8 @@ class PinAllocator:
         pin_owners = self.claimed_pins()
         if "digital_in" in pin_owners:
             raise PinAllocationError(
-                f"{instrument} cannot observe DigitalIn: held exclusively by {pin_owners['digital_in']}"
+                f"{instrument} cannot observe DigitalIn: held exclusively by "
+                f"{pin_owners['digital_in']}"
             )
         if self._observe_claims:
             other = next(iter(self._observe_claims))

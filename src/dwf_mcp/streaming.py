@@ -87,10 +87,9 @@ async def record_loop(
                     session.error = str(exc)
                     session.done = True
                     return
-                try:
+                # notification dropped on a full queue; recording continues unaffected
+                with contextlib.suppress(asyncio.QueueFull):
                     session.queue.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    pass  # notification dropped; recording continues unaffected
             if remaining == 0:
                 session.done = True
     except asyncio.CancelledError:

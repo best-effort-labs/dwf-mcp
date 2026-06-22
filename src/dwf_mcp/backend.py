@@ -221,7 +221,9 @@ class DwfBackend(ABC):
         raise NotImplementedError
 
     # Logic record-mode (DigitalIn streaming) — added in stage 3a.
-    def logic_record_configure(self, pin_mask: int, sample_rate_hz: float, duration_s: float) -> None:
+    def logic_record_configure(
+        self, pin_mask: int, sample_rate_hz: float, duration_s: float
+    ) -> None:
         raise NotImplementedError
 
     def logic_record_arm(self) -> None:
