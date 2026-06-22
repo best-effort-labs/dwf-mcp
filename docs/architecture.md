@@ -19,7 +19,7 @@ DwfDevice (device.py)        — session: lazy-open, idle close, safety gate
         ▼
 DwfBackend (backend.py)      — ABC; FakeBackend (tests) | PydwfBackend (hardware)
         ▼
-libdwf / Analog Discovery 3
+libdwf / Digilent device (AD3, ADP2230, Digital Discovery, …)
 ```
 
 Each layer only knows about the one below it. A new instrument is one file under
@@ -69,9 +69,11 @@ sufficient. DWF access is single-threaded.
 
 ## Device profiles & configuration (`devices/profiles.py`, `devices/configs.py`)
 
-The server supports two device families. `resolve_profile(devid)` maps the
-device-type id (**2 = AD1, 3 = AD2, 10 = AD3, 4 = Digital Discovery**) to a
-`DeviceProfile` (supported instruments, pin topology, electrical properties);
+The server supports three device families (classic Analog Discovery, Digital
+Discovery, and the Analog Discovery Pro 2230). `resolve_profile(devid)` maps the
+device-type id (**2 = AD1, 3 = AD2, 10 = AD3, 4 = Digital Discovery,
+14 = ADP2230**) to a `DeviceProfile` (supported instruments, pin topology,
+electrical properties);
 the pin inventory is then refined from the live capability query at open. This
 keeps instrument code device-agnostic.
 
@@ -128,6 +130,22 @@ across all devices (AD3, ADP2230, DD) with analog IO present.
 `dio24..dio31`, otherwise 32-bit. Captures spanning `dio32..dio39` are not yet
 supported pending hardware verification.
 
+### Analog Discovery Pro 2230 (devid 14)
+
+A full mixed-signal instrument (`_ALL_INSTRUMENTS`): scope, AWG, supply, logic,
+pattern, DIO, and protocols. Differences from the classic AD3 worth knowing:
+
+- **One user AWG.** Only `W1` is user-accessible (one BNC); the SDK reports
+  `analogOut.count() == 3`, but the other two channels are internal — the profile
+  caps `user_awg_count` at 1.
+- **Programmable analog supplies** (V+ 0.5–5 V, V− −0.5…−5 V), but a **fixed
+  3.3 V LVCMOS DIO** rail (5 V-tolerant input). There is no adjustable DIO
+  voltage here — that is a Digital Discovery feature.
+- **Bank-global DIO pull.** `dio.set_pull` applies to the whole 16-pin DIO bank,
+  not a single pin: the SDK expands a one-bit set to `0xFFFF`. `set_pull` detects
+  this granularity from `pullInfo` and writes the whole bank (vs. the per-pin
+  read-modify-write path on the Digital Discovery).
+
 ## Safety model (`policy.py` + `device.gate_output`)
 
 A `SafetyPolicy` is latched at `waveforms.open` and is immutable until close —
@@ -145,7 +163,7 @@ changing limits requires close + reopen, with no escape hatch. Fields:
 `device.gate_output(kind, ...)`**, which checks the policy, raises
 `SafetyViolation` on rejection, and appends a JSON line to
 `<workspace>/dwf-safety.log` (accepted *and* rejected). Current gate kinds:
-`supply_enable`, `awg_start`, `pattern_start`, `dio_set`.
+`supply_enable`, `awg_start`, `pattern_start`, `dio_set`, `dio_voltage`.
 
 Two subtleties worth knowing when adding output paths:
 

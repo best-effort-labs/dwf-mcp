@@ -20,30 +20,30 @@ tools: [waveforms.open, waveforms.list_pins, i2c.configure, i2c.scan, i2c.write,
 - `SDAPIN` (configurable DIO, e.g. `"dio0"`) → SDA line (with pull-up to VCC).
 - `SCLPIN` (configurable DIO, e.g. `"dio1"`) → SCL line (with pull-up to VCC).
 - `GND` → bus GND.
-- Pull-ups: the `i2c.configure` `pullup` parameter can enable the AD3's built-in software pull-ups (~4.7 kΩ). For higher bus speeds or long traces, use external pull-ups and disable the internal ones.
+- Pull-ups: the `i2c.configure` `pullups` parameter can enable the AD3's built-in software pull-ups (~4.7 kΩ). For higher bus speeds or long traces, use external pull-ups and disable the internal ones.
 
 **Jumperless V5 stimulus (RP2350B):** use hardware `machine.I2C(0, scl=Pin(21), sda=Pin(20), freq=10000)` — SoftI2C hangs. TOP_RAIL must be 3.3 V; GP20/GP21 are not 5V tolerant.
 
 **Tools + sequence:**
 
-1. `i2c.configure` — `sda_pin`, `scl_pin`, `clock_hz` (e.g. 100000 for standard, 400000 for fast), `pullup` (true/false). Must be called before any I2C read/write/scan.
-2. `i2c.scan` — scans all 7-bit addresses (0x08–0x77) and returns a list of responsive device addresses. Use to discover what is on the bus before reading.
+1. `i2c.configure` — `sda_pin`, `scl_pin`, `clock_hz` (e.g. 100000 for standard, 400000 for fast), optional `pullups` (true/false). Must be called before any I2C read/write/scan.
+2. `i2c.scan` — scans all 7-bit addresses (0x08–0x77). Use to discover what is on the bus before reading.
 3. `i2c.write` — `address` (7-bit), `data` (byte list). Writes bytes to the peripheral.
-4. `i2c.read` — `address`, `n_bytes`. Reads N bytes from the peripheral.
-5. `i2c.write_read` — `address`, `write_data`, `n_read_bytes`. Combined write-then-read in a single bus transaction — the standard register-read pattern for most sensors (write register address, read register value).
+4. `i2c.read` — `address`, `length`. Reads `length` bytes from the peripheral.
+5. `i2c.write_read` — `address`, `write` (byte list), `read_length`. Combined write-then-read in a single bus transaction — the standard register-read pattern for most sensors (write register address, read register value).
 
 **Formulae:** None.
 
 **Interpretation:**
 
-- `i2c.scan` returns `[address, ...]` — an empty list means no devices responded (check wiring and pull-ups).
-- `i2c.write` and `i2c.read` return the byte count and acknowledgment status.
+- `i2c.scan` returns `{"found": [address, ...], "count": N}` — an empty `found` means no devices responded (check wiring and pull-ups).
+- `i2c.write` returns `{"address", "ack", "nak_count"}`; `i2c.read` and `i2c.write_read` return `{"address", "data", "data_hex"}`.
 - `i2c.write_read` is the most common pattern: write 1–2 register-address bytes, read back N data bytes.
 
 **Gotchas:**
 
 - `i2c.scan` requires `i2c.configure` first — calling it without configuration raises `InstrumentNotConfigured`.
-- I2C lines must be pulled high (either external pull-ups or `pullup=true`). Without pull-ups, SCL and SDA float and every transaction fails with a timeout.
+- I2C lines must be pulled high (either external pull-ups or `pullups=true`). Without pull-ups, SCL and SDA float and every transaction fails with a timeout.
 - The I2C engine claims `i2c_engine`; a concurrent `sniff.i2c` (engine-mode) would also claim `i2c_engine` and conflict. Use `sniff.i2c_start` (observe-mode DigitalIn) for concurrent sniffing — see the sniff recipe below.
 
 ---
@@ -110,14 +110,14 @@ Loopback test: tie `MISO_PIN` to `MOSI_PIN` — `spi.transfer` echoes the sent b
 **Tools + sequence:**
 
 1. `spi.configure` — `clk_pin`, `frequency_hz`, `mode` (0–3: CPOL/CPHA), optional `mosi_pin`, `miso_pin`, `cs_pin`, `bit_order` (`"msb"` default or `"lsb"`).
-2. `spi.transfer` — `data` (byte list), `assert_cs` (true for automatic CS assertion). Returns `{"received": [...], "byte_count": N}` with the bytes captured on MISO.
-3. `spi.write` — write-only (MOSI only, MISO not captured). `data`, `assert_cs`.
-4. `spi.read` — read-only (MISO only, drives MOSI low). `n_bytes`, `assert_cs`.
+2. `spi.transfer` — `data` (byte list), `assert_cs` (true for automatic CS assertion). Returns `{"sent": [...], "received": [...]}` — the bytes clocked out and the bytes captured on MISO.
+3. `spi.write` — write-only (MOSI only, MISO not captured). `data`, `assert_cs`. Returns `{"bytes_written": N}`.
+4. `spi.read` — read-only (MISO only, drives MOSI low). `length`, `assert_cs`. Returns `{"data": [...], "data_hex": "..."}`.
 
 For asymmetric write-then-read with CS held low across both:
 ```
 spi.write(data=[REG_ADDR], assert_cs=false)   # CS asserts, stays low
-spi.read(n_bytes=4, assert_cs=true)            # CS deasserts at end
+spi.read(length=4, assert_cs=true)             # CS deasserts at end
 ```
 
 **Formulae:** None.
@@ -145,7 +145,7 @@ tools: [waveforms.open, waveforms.list_pins, sniff.spi_start, sniff.spi_status, 
 
 **Tools + sequence:**
 
-1. `sniff.spi_start` — `clk_pin`, `mosi_pin`, `miso_pin`, `cs_pin`, `mode` (0–3), `bit_order` (`"msb"` default), `max_duration_s`, optional `stream_decode`. Returns `{"sniff_id": "..."}`.
+1. `sniff.spi_start` — required `clk_pin`, `mosi_pin`, `mode` (0–3), `freq_hz`, `max_duration_s`; optional `miso_pin`, `cs_pin`, `stream_decode`. Returns `{"sniff_id": "..."}`.
 2. `sniff.spi_status` — poll with `sniff_id`; returns `{"done": bool, "samples_received": int, "lost_samples": int}`. Note: decoded frames are not returned by `sniff.spi_status` — they come from `sniff.spi_stop`.
 3. `sniff.spi_stop` — stop and return decoded frames (byte list per transaction) + Parquet artifact path.
 
@@ -186,11 +186,11 @@ tools: [waveforms.open, waveforms.list_pins, uart.configure, uart.write, uart.re
 
 1. `uart.configure` — `baud_rate`, optional `tx_pin`, `rx_pin`, `data_bits` (default 8), `parity` (`"none"`, `"even"`, `"odd"`), `stop_bits` (1 or 2).
 2. `uart.write` — `data` (byte list). Sends bytes on TX.
-3. `uart.read` — `n_bytes`, optional `timeout_s`. Returns received bytes as a list (may be shorter than `n_bytes` if timeout fires).
+3. `uart.read` — `length`, optional `timeout_s`. Returns `{"data": [...], "data_hex": "...", "parity_error": bool}` (the `data` list may be shorter than `length` if the timeout fires).
 
 **Formulae:** Byte transmission time = `(1 + data_bits + stop_bits) / baud_rate` seconds per byte (e.g. 8N1 at 9600 baud ≈ 1.04 ms/byte).
 
-**Interpretation:** `uart.read` returns bytes received within `timeout_s`. An empty list means no data arrived — check baud rate mismatch (the most common cause) and check that TX/RX are not swapped.
+**Interpretation:** `uart.read` returns the bytes received within `timeout_s` in its `data` field. An empty `data` list means no data arrived — check baud rate mismatch (the most common cause) and check that TX/RX are not swapped.
 
 **Gotchas:**
 
@@ -212,17 +212,17 @@ tools: [waveforms.open, waveforms.list_pins, sniff.uart, sniff.uart_start, sniff
 
 **Tools + sequence — blocking one-shot:**
 
-1. `sniff.uart` — `rx_pin`, `baud_rate`, `duration_s`, optional `data_bits`, `parity`, `stop_bits`. Blocks for `duration_s`, returns decoded frames + Parquet artifact.
+1. `sniff.uart` — `rx_pin`, `baud`, `duration_s`, optional `data_bits`, `parity`, `stop_bits`. Blocks for `duration_s`, returns decoded frames + Parquet artifact.
 
 **Tools + sequence — async observe-mode:**
 
-1. `sniff.uart_start` — `rx_pin`, `baud_rate`, `max_duration_s`, optional framing params, `stream_decode`. Returns `{"sniff_id": "..."}`.
+1. `sniff.uart_start` — `rx_pin`, `baud`, `max_duration_s`, optional framing params, `stream_decode`. Returns `{"sniff_id": "..."}`.
 2. `sniff.uart_status` — poll; returns `{"done": bool, "samples_received": int, "lost_samples": int}`.
 3. `sniff.uart_stop` — stop and return decoded frames + Parquet artifact.
 
 **Post-process decode (from a logic record):**
 
-4. `decoder.uart` — `capture_path`, `rx_pin`, `baud_rate`, framing params. Decodes UART bytes from a raw logic NPZ.
+4. `decoder.uart` — `capture_path`, `rx_pin`, `baud`, framing params. Decodes UART bytes from a raw logic NPZ.
 
 **Formulae:** None.
 
@@ -250,11 +250,11 @@ tools: [waveforms.open, waveforms.list_pins, can.configure, can.send, can.receiv
 
 **Tools + sequence:**
 
-1. `can.configure` — `tx_pin`, `rx_pin`, `bit_rate_hz` (e.g. 500000 for 500 kbit/s standard, 1000000 for 1 Mbit/s).
-2. `can.send` — `frame_id` (11-bit standard or 29-bit extended), `data` (byte list, up to 8 bytes), `extended` (true for 29-bit IDs). Transmits one CAN frame.
-3. `can.receive` — `timeout_s`. Blocks until one CAN frame arrives (or timeout); returns `{"frame_id": int, "data": [...], "extended": bool, "error_count": int}`.
+1. `can.configure` — `tx_pin`, `rx_pin`, `bit_rate` (e.g. 500000 for 500 kbit/s standard, 1000000 for 1 Mbit/s).
+2. `can.send` — `id` (11-bit standard or 29-bit extended), `data` (byte list, up to 8 bytes), `extended` (true for 29-bit IDs). Transmits one CAN frame.
+3. `can.receive` — `timeout_s`. Blocks until one CAN frame arrives (or timeout); returns `{"id": int, "data": [...], "data_hex": str, "extended": bool, "error_count": int}`.
 
-**Formulae:** CAN bit time = `1 / bit_rate_hz`; a standard 8-byte frame takes roughly 130 bit times (start, 11-bit ID, control, 8×8 data bits, CRC, ACK, end-of-frame).
+**Formulae:** CAN bit time = `1 / bit_rate`; a standard 8-byte frame takes roughly 130 bit times (start, 11-bit ID, control, 8×8 data bits, CRC, ACK, end-of-frame).
 
 **Interpretation:** `can.receive` returns one frame per call. For multi-frame traffic, call `can.receive` in a loop. `error_count > 0` indicates bus errors (stuffing error, CRC error) — typically a wiring fault, missing termination, or bit-rate mismatch.
 
@@ -278,17 +278,17 @@ tools: [waveforms.open, waveforms.list_pins, sniff.can, sniff.can_start, sniff.c
 
 **Tools + sequence — blocking one-shot:**
 
-1. `sniff.can` — `rx_pin`, `bit_rate_hz`, `duration_s`. Blocks and returns decoded frames + Parquet artifact.
+1. `sniff.can` — `rx_pin`, `bitrate`, `duration_s`. Blocks and returns decoded frames + Parquet artifact.
 
 **Tools + sequence — async observe-mode:**
 
-1. `sniff.can_start` — `rx_pin`, `bit_rate_hz`, `max_duration_s`, optional `stream_decode`. Returns `{"sniff_id": "..."}`.
+1. `sniff.can_start` — `rx_pin`, `bitrate`, `max_duration_s`, optional `stream_decode`. Returns `{"sniff_id": "..."}`.
 2. `sniff.can_status` — poll; returns `{"done": bool, "samples_received": int, "lost_samples": int}`.
 3. `sniff.can_stop` — stop and return decoded frames + Parquet artifact.
 
 **Post-process decode (from a logic record):**
 
-4. `decoder.can` — `capture_path`, `rx_pin`, `bit_rate_hz`. Decodes CAN frames from a raw logic NPZ.
+4. `decoder.can` — `capture_path`, `rx_pin`, `bitrate`. Decodes CAN frames from a raw logic NPZ.
 
 **Formulae:** None.
 
