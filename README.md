@@ -17,7 +17,7 @@ Most MCP servers hand a model a pile of tool schemas and hope it figures out the
 - **Digital I/O** — logic analyzer (buffer + streaming record), pattern generator, and per-pin DIO with drive-strength, pull-mode, and I/O-voltage control on devices that support it.
 - **Protocol masters** — I2C, SPI, UART, and CAN engines that talk to real chips without bit-banging.
 - **Protocol sniffing** — passive I2C/SPI/UART/CAN observers that **coexist with active masters on the same wires** (DigitalIn-based observe mode), plus software decoders that run over any recorded logic capture after the fact.
-- **Safety by construction** — output-enabling calls (supply, AWG, pattern, DIO drive) pass a `SafetyPolicy` gate (voltage/current/amplitude caps set at open time), and every decision is logged to `dwf-safety.log`.
+- **Safety by construction** — output-enabling calls (supply enable, AWG start, pattern start, DIO set/voltage) pass a `SafetyPolicy` gate (voltage/current/amplitude caps set at open time), and every decision is logged to `dwf-safety.log`.
 
 ## Supported hardware
 

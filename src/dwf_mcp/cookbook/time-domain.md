@@ -24,17 +24,17 @@ tools: [waveforms.open, scope.configure, scope.set_trigger, scope.capture, awg.c
 **Tools + sequence:**
 
 1. (Optional stimulus) `awg.configure` with `function`, `frequency_hz`, `amplitude_v` (peak), `offset_v`. Then `awg.start`.
-2. `scope.configure` — set `channel` (1 or 2), `range_v` (half the full-scale range in either direction), `offset_v`, `coupling` (`"DC"` or `"AC"`). Configure both channels for a two-channel capture by calling `scope.configure` twice.
-3. `scope.set_trigger` — set `source` (`"channel1"`, `"channel2"`, `"external"`, or `"none"`), `level_v` (threshold voltage), `slope` (`"rising"` or `"falling"`), and `auto` (`true` for free-run on timeout, `false` to wait indefinitely). A trigger on `"channel1"` at `level_v=1.65` with `slope="rising"` is a typical digital-signal trigger.
-4. `scope.capture` — pass `sample_rate_hz` and `n_samples`; optionally `output_path`. Returns an NPZ artifact path, sidecar path, and a summary (sample count, time span, per-channel min/max/mean/RMS).
+2. `scope.configure` — required: `channels` (array, e.g. `[1]` or `[1, 2]`), `range_v` (half the full-scale range in either direction), `sample_rate_hz`, `buffer_size`. Optional: `offset_v`, `coupling` (`"DC"` or `"AC"`). One call configures all listed channels.
+3. `scope.set_trigger` — required `source` (`"none"`, `"detector_analog_in"`, `"external1"`, or `"external2"`); for `detector_analog_in` also set `channel` (1 or 2), `level_v` (threshold voltage), and `condition` (`"Rising"`, `"Falling"`, or `"Either"`). Optional `position_s` (trigger position, default 0 s) and `timeout_s` (default 1 s — on timeout the capture falls back to free-run). A `detector_analog_in` trigger on channel 1 at `level_v=1.65`, `condition="Rising"` is a typical digital-signal trigger.
+4. `scope.capture` — optional `output_path`, `description` (rate and buffer were set on `configure`). Returns `path`, `sidecar_path`, and a per-channel `summary` (`min`/`max`/`mean`/`rms`/`freq_estimate`).
 5. `awg.stop` when done.
 
-**Formulae:** None (time-domain arrays — compute rise time, pulse width, overshoot from the NPZ `voltage` arrays and `time_s` index directly).
+**Formulae:** None (time-domain arrays — compute rise time, pulse width, overshoot from the NPZ per-channel `ch1`/`ch2` arrays directly; derive the time axis from `sample_rate_hz` and the sample index).
 
 **Interpretation:**
 
-- The NPZ contains `time_s` (the time axis), and per-channel `voltage` arrays. The sidecar carries the configuration.
-- Triggered captures align the trigger event at the pre-trigger position (default: ~10% of the buffer, configurable). With `auto: true`, a trigger that does not fire within the timeout will still return a capture (free-run fallback).
+- The NPZ contains one array per channel (`ch1`, `ch2`); there is no separate time axis — derive it from `sample_rate_hz` (carried in the summary/sidecar) and the sample index. The sidecar carries the full configuration.
+- Triggered captures (`source: "detector_analog_in"`) position the trigger event per `position_s` (default 0 s). A trigger that does not fire within `timeout_s` returns a free-run capture (the timeout is the auto-fallback).
 - With `source: "none"` the capture is immediate free-run with no trigger alignment.
 
 **Gotchas:**
@@ -133,7 +133,7 @@ tools: [waveforms.open, dmm.measure]
 
 **Tools + sequence:**
 
-1. `dmm.measure` — params: `channel` (1 or 2), `mode` (`"dc"` or `"ac"`), optional `n_samples` for averaging. Returns `mean_v`, `min_v`, `max_v`, `rms_v`.
+1. `dmm.measure` — required `channel` (1 or 2) and `range_v`; optional `coupling` (`"DC"` or `"AC"`, default `"DC"`) and `n_averages` (default 64). Returns `mean_v`, `min_v`, `max_v`, `rms_v` (plus `channel`, `range_v`, `coupling`).
 
 **Formulae:** For AC: true RMS = `rms_v`. For a pure sine: `rms_v = amplitude / √2`. For DC plus ripple: `rms_v² = dc² + ac_rms²`.
 
@@ -212,8 +212,8 @@ After a logic record, run `decoder.i2c`, `decoder.spi`, `decoder.uart`, or `deco
 
 **Interpretation:**
 
-- The NPZ from a scope record has `time_s` and per-channel `voltage` arrays, same schema as a buffered capture.
-- The NPZ from a logic record has `time_s` and per-pin `data` arrays (uint8, 0/1 per sample).
+- The NPZ from a scope record has one array per channel (`ch1`, `ch2`), same schema as a buffered capture; derive the time axis from `sample_rate_hz`.
+- The NPZ from a logic record has one array per captured pin, keyed by pin name (`dio0`, `dio1`, …; uint8, 0/1 per sample); derive the time axis from `sample_rate_hz`.
 - `lost_samples > 0` in the record-stop result means the record buffer overflowed — the host could not drain samples fast enough. Reduce `sample_rate_hz` or `duration_s`.
 
 **Gotchas:**
@@ -237,18 +237,18 @@ tools: [waveforms.open, waveforms.list_pins, logic.configure, logic.set_trigger,
 **Tools + sequence:**
 
 1. `logic.configure` — `pins` list, `sample_rate_hz`, `buffer_size`.
-2. `logic.set_trigger` — `source` (`"none"`, `"detector"`, or `"external"`), `pin` (the trigger pin), `edge` (`"rising"`, `"falling"`, or `"either"`), `position` (pre-trigger fraction, 0.0–1.0), `timeout_s`. Setting `source: "none"` is a free-run capture.
+2. `logic.set_trigger` — `source` (`"none"`, `"detector_digital_in"`, `"external1"`, or `"external2"`), `pin` (the trigger pin), `condition` (`"Rising"`, `"Falling"`, or `"Either"`), optional `level`, `position_s` (default 0 s), `timeout_s`. Setting `source: "none"` is a free-run capture.
 3. `logic.capture` — fires the capture and returns an NPZ artifact + summary.
 
 Then optionally:
 
 4. `decoder.i2c` / `decoder.spi` / `decoder.uart` / `decoder.can` — decode protocol transactions from the captured NPZ. Each takes the `capture_path` and pin assignments (see protocol recipes).
 
-**Formulae:** Timing: read `time_s` array from the NPZ; edge timestamps computed from transitions in the `data` array.
+**Formulae:** Timing: the NPZ has one uint8 array per captured pin (0/1 per sample); edge timestamps come from transitions in each pin's array, with time derived from `sample_rate_hz`.
 
-**Interpretation:** The NPZ `data` array has shape `(n_samples, n_pins)`, dtype uint8 (0/1 per pin). The `time_s` array is the corresponding time axis. Transitions in `data[:, pin_index]` give edge timestamps.
+**Interpretation:** The NPZ stores one array per captured pin, keyed by pin name (`dio0`, `dio1`, …), dtype uint8 (0/1 per sample). There is no separate time axis — derive it from `sample_rate_hz` (in the summary/sidecar) and the sample index. Transitions in a pin's array give its edge timestamps.
 
-**Gotchas:** Triggering with `source: "detector"` fires on the first qualifying edge on `pin`; with `source: "external"` it fires on the AD3's external trigger input. `source: "none"` captures immediately without waiting.
+**Gotchas:** Triggering with `source: "detector_digital_in"` fires on the first qualifying edge on `pin`; with `source: "external1"`/`"external2"` it fires on the device's external trigger input. `source: "none"` captures immediately without waiting.
 
 ---
 id: time-domain:pattern-gen
