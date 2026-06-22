@@ -1,17 +1,36 @@
 # dwf-mcp
 
-An [MCP](https://modelcontextprotocol.io) server that exposes the [Digilent WaveForms SDK](https://digilent.com/reference/test-and-measurement/waveforms/waveforms-sdk/start) for the Analog Discovery 3 (and compatible Digilent devices) to LLM agents. Lets a conversational model drive a real benchtop — scope, AWG, supply, logic analyzer, protocol masters, protocol sniffers, post-process decoders — through a stable tool surface.
+**Drive a real electronics bench by conversation.**
 
-## Status
+An [MCP](https://modelcontextprotocol.io) server that exposes the [Digilent WaveForms SDK](https://digilent.com/reference/test-and-measurement/waveforms/waveforms-sdk/start) to LLM agents. It turns an Analog Discovery (and compatible Digilent instruments) into a tool surface a conversational model can actually wield — oscilloscope, arbitrary waveform generator, programmable supply, logic analyzer, **spectrum / Bode / impedance analyzers**, protocol masters, live bus sniffers, and post-process decoders — behind one stable, safety-gated API.
 
-All four stages complete:
+The pitch in one line: given a wired-up circuit, an agent can generate a stimulus, capture the response, and reason about real volts — not a simulation.
 
-- **Stage 1–2:** safety policy, pin allocator, artifact writer, instrument ABC, lazy device + idle/unplug recovery, scope, supply, I2C master.
-- **Stage 3:** AWG, logic analyzer (buffer + streaming record), pattern, DIO, DMM, CAN, SPI, UART. VCD writer.
-- **Stage 4:** protocol sniff (I2C/UART/CAN spy via protocol engines, SPI sniff via DigitalIn observer), `SpiDecoder` + post-process `decoder.spi` tool.
-- **Stage 5:** `I2cDecoder` / `UartDecoder` / `CanDecoder` + post-process `decoder.{i2c,uart,can}` tools + async observe-mode `sniff.{i2c,uart,can,spi}_start/status/stop` tools that use DigitalIn instead of protocol engines (and therefore coexist with active masters on the same wires). 32 MB raw memory cap, 300s session reap, full schema parity between engine-mode and observe-mode artifacts.
+## Not just tools — expertise
 
-338 unit tests, 24 hardware tests passing on AD3 + Jumperless V5.
+Most MCP servers hand a model a pile of tool schemas and hope it figures out the rest. dwf-mcp also ships a **measurement cookbook**: 19 recipes that map an *intent* ("measure a filter's gain and phase", "sniff an I2C bus while a master is active", "find a component's impedance") to the exact tool sequence, the wiring, and the **validated math** for interpreting the result. It's served as MCP resources (`dwf://cookbook/*`), and every one of the 75 tools carries a one-line description. An agent gets the know-how to operate the bench, not just its API.
+
+## What it can do
+
+- **Time domain** — triggered/free-run scope capture, long streaming records past the hardware buffer, AWG (built-in functions *and* arbitrary `.npy` waveforms), programmable dual supply, and a high-accuracy DMM.
+- **Frequency domain** — FFT spectrum analyzer, Bode gain/phase sweeps, and full complex-impedance analysis (`|Z|`, phase, R/X, C/L, Q/D vs. frequency). All three hardware-validated.
+- **Digital I/O** — logic analyzer (buffer + streaming record), pattern generator, and per-pin DIO with drive-strength, pull-mode, and I/O-voltage control on devices that support it.
+- **Protocol masters** — I2C, SPI, UART, and CAN engines that talk to real chips without bit-banging.
+- **Protocol sniffing** — passive I2C/SPI/UART/CAN observers that **coexist with active masters on the same wires** (DigitalIn-based observe mode), plus software decoders that run over any recorded logic capture after the fact.
+- **Safety by construction** — output-enabling calls (supply, AWG, pattern, DIO drive) pass a `SafetyPolicy` gate (voltage/current/amplitude caps set at open time), and every decision is logged to `dwf-safety.log`.
+
+## Supported hardware
+
+The server probes the connected device at open time and gates tools to its real capabilities.
+
+| Device | Role | Status |
+|--------|------|--------|
+| **Analog Discovery 3** | Full mixed-signal (scope, AWG, supply, logic, DIO, protocols) | Primary target — fully hardware-validated |
+| **ADP2230** | Full mixed-signal; DIO drive-strength + pull control (fixed 3.3 V LVCMOS I/O); 1 user AWG (W1) | Hardware-validated |
+| **Digital Discovery** | Digital-only (logic analyzer, pattern, DIO); adjustable 1.2–3.3 V DIO levels | Hardware-validated |
+| **Analog Discovery 1 / 2** | Mixed-signal | Compatible (AD2 streaming-record quirk known) |
+
+Hardware-test auto-wiring uses a [Jumperless V5](https://github.com/Architeuthis-Flux/Jumperless) programmable breadboard when present.
 
 ## Install
 
@@ -25,7 +44,7 @@ Requires the WaveForms runtime (which provides `libdwf`) and Python 3.11+. macOS
 
 ### Linux
 
-Verified end-to-end on Ubuntu 24.04 (x86_64): full unit suite + all 24 hardware tests against an AD3 + Jumperless V5. Two Digilent packages are required — both download without a login from Digilent's [previous-releases pages](https://digilent.com/reference/software/waveforms/waveforms-3/previous-versions):
+Verified end-to-end on Ubuntu 24.04 (x86_64): full unit suite + all hardware tests against an AD3 + Jumperless V5. Two Digilent packages are required — both download without a login from Digilent's [previous-releases pages](https://digilent.com/reference/software/waveforms/waveforms-3/previous-versions):
 
 ```bash
 curl -fsSO "https://files.digilent.com/Software/Adept2%20Runtime/2.27.9/digilent.adept.runtime_2.27.9-amd64.deb"
@@ -59,7 +78,7 @@ Verified on Proxmox 8 with both devices USB-passed-through. Hard-won notes:
 dwf-mcp
 ```
 
-Speaks MCP over stdio. Configure your LLM client (Claude Desktop, Claude Code, etc.) to launch it as a tool server.
+Speaks MCP over stdio. Configure your LLM client (Claude Desktop, Claude Code, etc.) to launch it as a tool server. On first contact, point the agent at `dwf://cookbook/index` — the server's MCP instructions already do this.
 
 ### Environment variables
 
@@ -77,8 +96,9 @@ Speaks MCP over stdio. Configure your LLM client (Claude Desktop, Claude Code, e
 | Power | `supply.{set,enable,disable,read}` (safety-gated) |
 | Analog in | `scope.{configure,capture,set_trigger,record_start,record_status,record_stop}` |
 | Analog out | `awg.{configure,upload_custom,start,stop}` |
+| Frequency domain | `spectrum.{configure,measure,transform}`, `bode.{configure,measure}`, `impedance.{configure,measure}` |
 | Digital in | `logic.{configure,capture,set_trigger,record_start,record_status,record_stop}` |
-| Digital out | `pattern.{configure,start,stop}`, `dio.{set_direction,set,read}` |
+| Digital out | `pattern.{configure,start,stop}`, `dio.{set_direction,set,read,set_drive,set_pull,set_voltage}` |
 | Measurement | `dmm.measure` |
 | Protocol masters | `i2c.{configure,scan,write,read,write_read}`, `spi.{configure,transfer,write,read}`, `uart.{configure,write,read}`, `can.{configure,send,receive}` |
 | Protocol sniff (blocking, engine-mode) | `sniff.{i2c,uart,can}` |
@@ -104,26 +124,45 @@ Every output-driving call (`supply.enable`, `awg.start`, `pattern.start`) routes
 }}
 {"name": "awg.start", "arguments": {"channel": 1}}
 
-// 3. Configure scope CH1 ±2.5V around the W1 trace and capture.
+// 3. Configure scope CH1 (range/rate/buffer live on configure), set trigger, capture.
 {"name": "scope.configure", "arguments": {
-  "channel": 1, "range_v": 2.5, "offset_v": 1.5, "coupling": "DC"
+  "channels": [1], "range_v": 5.0, "offset_v": 1.5, "coupling": "DC",
+  "sample_rate_hz": 1e6, "buffer_size": 8192
 }}
 {"name": "scope.set_trigger", "arguments": {
-  "source": "channel1", "level_v": 1.65, "slope": "rising", "auto": true
+  "source": "detector_analog_in", "channel": 1,
+  "level_v": 1.65, "condition": "Rising"
 }}
-{"name": "scope.capture", "arguments": {
-  "sample_rate_hz": 1e6, "n_samples": 8192,
-  "output_path": "/tmp/square_capture.npz"
-}}
-// → {"artifact_path": "/tmp/square_capture.npz",
-//    "sidecar_path": "/tmp/square_capture.json", ...}
+{"name": "scope.capture", "arguments": {"output_path": "/tmp/square_capture.npz"}}
+// → {"path": "/tmp/square_capture.npz",
+//    "sidecar_path": "/tmp/square_capture.json", "summary": {...}}
 ```
 
 The LLM can then load the npz and reason about the waveform, or call further tools to act on what it sees.
 
-### 2. Sniff an I2C bus concurrently with active master
+### 2. Characterize a filter — gain and phase vs. frequency (Bode)
 
-This is the headline Stage 5 capability: `sniff.i2c_start/stop` (observe-mode) uses DigitalIn, while `i2c.scan/write/read` use the protocol engine — they don't conflict.
+`bode` and `impedance` sweep the AWG and ratiometrically capture two scope channels; `spectrum` does a single-channel FFT instead. For a Bode plot, drive the filter input from W1, watch the input on CH1 (reference) and the output on CH2 (DUT).
+
+```jsonc
+{"name": "waveforms.open", "arguments": {}}
+
+// Sweep 100 Hz → 100 kHz, 50 log-spaced points; CH1 = filter in, CH2 = filter out.
+{"name": "bode.configure", "arguments": {
+  "start_hz": 100, "stop_hz": 100000, "points": 50, "spacing": "log",
+  "drive_channel": 1, "ref_channel": 1, "dut_channel": 2,
+  "amplitude_v": 1.0
+}}
+{"name": "bode.measure", "arguments": {}}
+// → {"path": ".../bode_<id>.npz", "sidecar_path": ".../bode_<id>.json",
+//    "summary": {"point_count": 50, "gain_db_min": ..., "gain_db_max": ..., ...}}
+```
+
+The npz carries gain (dB) and phase (deg) per frequency; the agent reads off the slope and resonance directly, and the −3 dB corner via the cookbook's validated `bode_f3db` formula. `impedance.configure`/`measure` follow the same shape (add a series reference resistor) and return `|Z|`, phase, and the derived R/X, C/L, Q/D — see `dwf://cookbook/freq-domain` for the recipes and the math.
+
+### 3. Sniff an I2C bus concurrently with active master
+
+`sniff.i2c_start/stop` (observe-mode) uses DigitalIn, while `i2c.scan/write/read` use the protocol engine — they don't conflict on the same wires.
 
 ```jsonc
 {"name": "waveforms.open", "arguments": {}}
@@ -146,7 +185,7 @@ This is the headline Stage 5 capability: `sniff.i2c_start/stop` (observe-mode) u
 // → {"artifact_path": "...parquet", "count": 128, "summary": {...}, ...}
 ```
 
-### 3. Drive an active SPI master and read back the response
+### 4. Drive an active SPI master and read back the response
 
 The four protocol masters (`i2c`, `spi`, `uart`, `can`) wrap the AD3's protocol engines so the LLM can talk to real chips without bit-banging. SPI shown here; the others follow the same `configure` → `transfer/write/read` shape.
 
@@ -161,12 +200,12 @@ The four protocol masters (`i2c`, `spi`, `uart`, `can`) wrap the AD3's protocol 
 
 // Drive CS low, clock out 4 bytes, capture 4 bytes from MISO, drive CS high.
 {"name": "spi.transfer", "arguments": {"data": [0xAB, 0xCD, 0xEF, 0x12], "assert_cs": true}}
-// → {"received": [171, 205, 239, 18], "byte_count": 4}
+// → {"sent": [171, 205, 239, 18], "received": [171, 205, 239, 18]}
 ```
 
 For asymmetric reads (write-then-read with a turnaround), use `spi.write` + `spi.read` separately with `assert_cs: false` on the first call so CS stays low across both.
 
-### 4. Long observe-mode capture with live decode (`stream_decode: true`)
+### 5. Long observe-mode capture with live decode (`stream_decode: true`)
 
 By default each `sniff.*_start` enforces a 32 MB raw-sample ceiling via `check_memory_cap` — at AD3 sample rates a multi-second capture saturates quickly. Pass `stream_decode: true` to feed chunks through the protocol decoder during capture instead of buffering raw samples. The 32 MB cap is skipped (max duration is the only remaining bound).
 
@@ -192,7 +231,7 @@ By default each `sniff.*_start` enforces a 32 MB raw-sample ceiling via `check_m
 
 If the decoder can't keep up with the chunk rate (rare for I2C/UART at typical rates, more likely for SPI/CAN at the upper end), the backend's record buffer fills and samples drop — `lost_samples > 0` in the stop result is the signal. The captured-and-decoded transactions are still valid; only the dropped raw bytes weren't seen. Reduce `sample_rate_hz` or `max_duration_s` (or fall back to `stream_decode: false` with the cap).
 
-### 5. Record raw logic + decode any protocol after the fact
+### 6. Record raw logic + decode any protocol after the fact
 
 `logic.record_start/stop` produces a raw DIO npz; the `decoder.*` tools then run software state machines over it. You can decode the same capture as multiple protocols, decide on parameters after seeing the data, etc.
 
@@ -217,17 +256,19 @@ If the decoder can't keep up with the chunk rate (rare for I2C/UART at typical r
 **For protocols beyond the built-in four (i2c, uart, spi, can):** the captured `.npz` can be decoded with [`sigrok-cli`](https://sigrok.org/wiki/Sigrok-cli) (which ships ~150 libsigrokdecode protocols — DS18B20, MDIO, JTAG, USB-LS, OneWire, SDQ, etc.). There is no dedicated MCP tool — a calling agent with shell + Python access can:
 
 ```bash
-# 1. Convert the npz channels to sigrok's binary input format (~5 lines)
+# 1. Convert the npz channels to sigrok's binary input format
 python3 -c "
 import numpy as np
-arr = np.load('/workspace/logic_<id>.npz')['data']  # shape (n_samples, 16) uint8 per-pin
-# pack the active channels into one byte per sample, LSB = lowest pin index
-packed = np.packbits(arr[:, :8][:, ::-1], axis=1).squeeze().tobytes()
-open('/tmp/cap.bin', 'wb').write(packed)
+npz = np.load('/workspace/logic_<id>.npz')   # one 1-D uint8 array per pin name
+pins = ['dio0', 'dio1', 'dio2', 'dio3']       # the captured pins
+packed = np.zeros(npz[pins[0]].shape[0], dtype=np.uint8)
+for bit, p in enumerate(pins):                # bit i = pins[i] (D0 = dio0)
+    packed |= (npz[p].astype(np.uint8) & 1) << bit
+open('/tmp/cap.bin', 'wb').write(packed.tobytes())
 "
 
-# 2. Decode (here: DS18B20 OneWire on dio0; substitute your protocol + pin map)
-sigrok-cli -I binary:numchannels=8:samplerate=10000000 -i /tmp/cap.bin \
+# 2. Decode (here: DS18B20 OneWire on D0 = dio0; substitute your protocol + pin map)
+sigrok-cli -I binary:numchannels=4:samplerate=10000000 -i /tmp/cap.bin \
   -P onewire_link:owr=0,onewire_network,onewire_transport,ds18b20 \
   -A ds18b20
 
@@ -236,7 +277,7 @@ sigrok-cli -I binary:numchannels=8:samplerate=10000000 -i /tmp/cap.bin \
 
 `sigrok-cli -L` lists all available decoders; `sigrok-cli --show-pd protocol_id` describes one. The ~100ms-per-call startup is fine for one-shot post-process. If you need this often, wrap steps 1-3 in a helper script.
 
-### 6. Play an arbitrary waveform on AWG W1 from a .npy file
+### 7. Play an arbitrary waveform on AWG W1 from a .npy file
 
 `awg.configure` covers the built-in functions (Sine/Square/Triangle/RampUp/RampDown/DC/Noise). For anything else — recorded data, a custom envelope, a PWM-encoded message — use `awg.upload_custom`. Samples come from a `.npy` file on the server's filesystem, must be 1-D, and must be in the range [-1.0, 1.0] (they're scaled by `amplitude_v` at upload time).
 
@@ -264,35 +305,26 @@ sigrok-cli -I binary:numchannels=8:samplerate=10000000 -i /tmp/cap.bin \
 
 The waveform loops indefinitely until `awg.stop` or `waveforms.close`. The playback frequency depends on the AD3's hardware sample clock; configure that separately via `awg.configure` if you need a specific repetition rate.
 
-### 7. Idle timeout (auto-release hardware)
+### 8. Idle timeout (auto-release hardware)
 
 The server tracks `_last_activity` per tool call and closes the device after `idle_timeout_s` (default 10 min). The next `call_tool` invocation returns `{"error": {"type": "DwfDeviceLost", ...}}`. The LLM can re-`waveforms.open` to recover.
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md) — layered design, safety model,
-  pin allocator, streaming/record, observe-mode sniff, backend contract. For
-  developers extending the server and agents needing a deeper mental model.
-- [docs/troubleshooting.md](docs/troubleshooting.md) — known limitations
-  (including device unplug), Linux/VM hardware-setup gotchas, safety-policy
-  behavior, the sniff memory cap, and a common-error table.
+- **Measurement cookbook** — served live as MCP resources; start at `dwf://cookbook/index`:
 
-### Measurement cookbook
+  | Resource URI | Contents |
+  |---|---|
+  | `dwf://cookbook/index` | Intent → recipe map, quick-start, and a one-liner for every tool |
+  | `dwf://cookbook/freq-domain` | Spectrum, Bode, impedance recipes + the validated math |
+  | `dwf://cookbook/time-domain` | Scope capture, AWG stimulus, supply, DMM, GPIO, record, THD/SNR |
+  | `dwf://cookbook/protocols` | I2C, SPI, UART, CAN — master and sniff recipes |
+  | `dwf://cookbook/bench` | Session setup, power supply, pattern generator |
 
-The measurement cookbook lives at `src/dwf_mcp/cookbook/` and is served as MCP
-resources at runtime:
+  The source lives at `src/dwf_mcp/cookbook/`. The server's MCP `instructions` point agents at `dwf://cookbook/index` before they call any measurement tool.
 
-| Resource URI | Contents |
-|---|---|
-| `dwf://cookbook/index` | Overview, quick-start, and navigation |
-| `dwf://cookbook/freq-domain` | Spectrum, Bode, impedance recipes |
-| `dwf://cookbook/time-domain` | Scope capture, THD, SNR recipes |
-| `dwf://cookbook/protocols` | I2C, SPI, UART, CAN recipes |
-| `dwf://cookbook/bench` | Power supply, DMM, pattern-gen recipes |
-
-The server's MCP instructions pointer directs agents to `dwf://cookbook/index`
-as the recommended starting point before calling any measurement tool. Agents
-that load the index discover the other recipe documents on demand.
+- [docs/architecture.md](docs/architecture.md) — layered design, safety model, pin allocator, streaming/record, observe-mode sniff, backend contract. For developers extending the server and agents needing a deeper mental model.
+- [docs/troubleshooting.md](docs/troubleshooting.md) — known limitations (including device unplug), Linux/VM hardware-setup gotchas, safety-policy behavior, the sniff memory cap, and a common-error table.
 
 ## Architecture
 
@@ -300,7 +332,7 @@ Three layers:
 
 - **Backend** (`backends/{fake,pydwf_backend}.py` behind `DwfBackend` ABC) wraps the C SDK. The fake backend is used for unit tests; the pydwf backend talks to real hardware.
 - **Instruments** (`instruments/*.py` behind `Instrument` ABC) own the per-domain semantics: pin claims, safety gating, artifact writing, lifecycle. Each instrument exposes a `tools: dict[str, (method_name, schema)]` for the dispatcher.
-- **Server** (`server.py`) is the MCP entry point. `DwfMcpApp.call_tool` dispatches by `<instrument>.<tool>` name, runs the device's idle ticker, converts known exception types (`SafetyViolation`, `PinAllocationError`, `DwfDeviceLost`, `InstrumentNotConfigured`) into `{"error": {...}}` result dicts.
+- **Server** (`server.py`) is the MCP entry point. `DwfMcpApp.call_tool` dispatches by `<instrument>.<tool>` name, runs the device's idle ticker, converts known exception types (`SafetyViolation`, `PinAllocationError`, `DwfDeviceLost`, `InstrumentNotConfigured`) into `{"error": {...}}` result dicts. `build_server` additionally wires the cookbook MCP resources and tool descriptions.
 
 `PinAllocator` enforces mutual exclusion on physical DIO pins + virtual resources (`i2c_engine`, `uart_engine`, etc.), and supports a `claim_observe` mode that lets an observer (e.g. `sniff.spi_start`) coexist with an exclusive writer (e.g. `i2c.configure`) on the same wires.
 
@@ -309,30 +341,34 @@ Three layers:
 ## Testing
 
 ```bash
-pytest tests/unit                 # ~400 tests, no hardware
-pytest tests/hardware -m hardware # 27 tests, requires AD3 (+ Jumperless V5 for protocol sniff tests)
+pytest -m 'not hardware'           # 619 tests, no hardware (fake backend)
+pytest -m hardware                 # 46 tests, requires a Digilent device (+ Jumperless V5 for wired protocol/sniff tests)
 ruff check src/ tests/
 mypy src/
 ```
 
-`tests/hardware/conftest.py` includes a `jumperless` fixture that auto-routes signals via a [Jumperless V5](https://github.com/Architeuthis-Flux/Jumperless) breadboard. When Jumperless isn't available, tests prompt the user to make connections by hand (or skip if the test depends on RP2350B-driven stimulus).
+Hardware tests self-classify with `standalone` (device-only) and `wired` (needs connections) markers, and gate on declared requirements via `@pytest.mark.requires(instruments=..., pins=...)`. `tests/hardware/conftest.py` includes a `jumperless` fixture that auto-routes signals via a [Jumperless V5](https://github.com/Architeuthis-Flux/Jumperless) breadboard; wired tests auto-skip when none is attached. Select a specific device with `DWF_TEST_SERIAL=<serial>`.
 
 ## Repository layout
 
 ```
 src/dwf_mcp/
-  server.py              # DwfMcpApp + stdio MCP entry point
+  server.py              # DwfMcpApp + build_server + stdio MCP entry point
   device.py              # DwfDevice: lazy open / idle close / safety gate
   policy.py              # SafetyPolicy
   allocator.py           # PinAllocator, claim / claim_observe
   artifacts.py           # ArtifactWriter (npz / parquet + JSON sidecar)
   streaming.py           # RecordingSession + record_loop (shared by scope/logic)
+  formulae.py            # validated derived measurements (thd / snr_db / bode_f3db)
+  tool_descriptions.py   # one-line description per tool (drift-tested vs. app._tools)
   backend.py             # DwfBackend ABC
   backends/
     fake.py              # in-memory backend for unit tests
-    pydwf_backend.py     # real AD3 via pydwf
+    pydwf_backend.py     # real device via pydwf
+  cookbook/              # measurement cookbook (loader + recipe docs → MCP resources)
   instruments/
     {scope,awg,supply,logic,pattern,dio,dmm,i2c,spi,uart,can,sniff}.py
+    {spectrum,bode,impedance}.py
     decoder/
       base.py            # Decoder ABC + per-protocol dataclasses
       {spi,i2c,uart,can}.py
