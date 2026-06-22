@@ -126,6 +126,14 @@ class Logic(Instrument):
         assert self.device.inventory is not None
         return [self.device.inventory.subsystem_bit(p, "digitalin") for p in pins]
 
+    def _validate_format(self, format: str) -> None:
+        if format not in _VALID_FORMATS:
+            raise ValueError(f"format must be one of {sorted(_VALID_FORMATS)}, got {format!r}")
+        if format == "vcd" and not self.device.vcd_enabled:
+            raise ValueError(
+                "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
+            )
+
     # --- Buffer-mode ---
 
     def configure(
@@ -189,12 +197,7 @@ class Logic(Instrument):
     ) -> dict[str, Any]:
         if self._config is None:
             raise InstrumentNotConfigured("logic.configure must be called before capture")
-        if format not in _VALID_FORMATS:
-            raise ValueError(f"format must be one of {sorted(_VALID_FORMATS)}, got {format!r}")
-        if format == "vcd" and not self.device.vcd_enabled:
-            raise ValueError(
-                "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
-            )
+        self._validate_format(format)
         cfg = self._config
         self.device.backend.logic_arm()
         deadline_s = max(cfg["buffer_size"] / cfg["sample_rate_hz"] * 10 + 1.0, 2.0)
@@ -265,12 +268,7 @@ class Logic(Instrument):
         format: str = "npz",
         on_chunk: Callable[[str, np.ndarray], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
-        if format not in _VALID_FORMATS:
-            raise ValueError(f"format must be one of {sorted(_VALID_FORMATS)}, got {format!r}")
-        if format == "vcd" and not self.device.vcd_enabled:
-            raise ValueError(
-                "VCD output is disabled (set DWF_ENABLE_VCD=1 or install dwf-mcp[vcd])"
-            )
+        self._validate_format(format)
         for pin in pins:
             self.device.validate_pin(pin)
         self.device.validate_logic_rate(sample_rate_hz)

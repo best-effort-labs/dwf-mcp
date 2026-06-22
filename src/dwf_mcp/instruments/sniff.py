@@ -22,14 +22,11 @@ from dwf_mcp.instruments.decoder.can import CanDecoder
 from dwf_mcp.instruments.decoder.i2c import I2cDecoder
 from dwf_mcp.instruments.decoder.spi import SpiDecoder
 from dwf_mcp.instruments.decoder.uart import UartDecoder
+from dwf_mcp.pin_utils import dio_index as _dio_index
 
 log = logging.getLogger(__name__)
 
 _PIN_RE = r"^dio\d+$"
-
-
-def _dio_index(pin: str) -> int:
-    return int(pin[3:])
 
 
 SNIFF_I2C_SCHEMA: dict[str, Any] = {
@@ -475,7 +472,7 @@ class Sniff(Instrument):
             self.device.validate_pin(p)
         if not stream_decode:
             check_memory_cap(sample_rate_hz, max_duration_s, n_pins=len(pins))
-        pin_mask = sum(1 << int(p[3:]) for p in pins)
+        pin_mask = sum(1 << _dio_index(p) for p in pins)
 
         sniff_id = str(uuid.uuid4())
         allocator_key = f"sniff_spi_{sniff_id}"
@@ -494,13 +491,13 @@ class Sniff(Instrument):
         decoder_inst: Any | None = None
         if stream_decode:
             pin_map: dict[str, int] = {
-                "clk":  int(clk_pin[3:]),
-                "mosi": int(mosi_pin[3:]),
+                "clk":  _dio_index(clk_pin),
+                "mosi": _dio_index(mosi_pin),
             }
             if miso_pin is not None and miso_pin in pins:
-                pin_map["miso"] = int(miso_pin[3:])
+                pin_map["miso"] = _dio_index(miso_pin)
             if cs_pin is not None and cs_pin in pins:
-                pin_map["cs"] = int(cs_pin[3:])
+                pin_map["cs"] = _dio_index(cs_pin)
             decoder_inst = SpiDecoder()
             decoder_inst.init(pin_map, sample_rate_hz=sample_rate_hz, mode=mode)
         session = start_observe_session(
@@ -546,13 +543,13 @@ class Sniff(Instrument):
             else:
                 pins = meta["pins"]
                 pin_map: dict[str, int] = {
-                    "clk":  int(meta["clk_pin"][3:]),
-                    "mosi": int(meta["mosi_pin"][3:]),
+                    "clk":  _dio_index(meta["clk_pin"]),
+                    "mosi": _dio_index(meta["mosi_pin"]),
                 }
                 if meta["miso_pin"] and meta["miso_pin"] in pins:
-                    pin_map["miso"] = int(meta["miso_pin"][3:])
+                    pin_map["miso"] = _dio_index(meta["miso_pin"])
                 if meta["cs_pin"] and meta["cs_pin"] in pins:
-                    pin_map["cs"] = int(meta["cs_pin"][3:])
+                    pin_map["cs"] = _dio_index(meta["cs_pin"])
                 decoder = SpiDecoder()
                 decoder.init(
                     pin_map, sample_rate_hz=meta["sample_rate_hz"], mode=meta["mode"],

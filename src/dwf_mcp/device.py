@@ -141,9 +141,6 @@ class DwfDevice:
         if self.inventory is not None and pin in self.inventory.input_only:
             raise ValueError(f"pin {pin!r} is input-only on {self._device_name()}")
 
-    def validate_input_pin(self, pin: str) -> None:
-        self.validate_pin(pin)
-
     def validate_logic_rate(self, rate_hz: float) -> None:
         assert self._info is not None
         cap = self._info.digital_in_rate_max_hz
