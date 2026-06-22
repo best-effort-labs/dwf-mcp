@@ -5,7 +5,6 @@ readback of actual freq/rate, explicit per-point quality flags. Clones the Bode
 orchestration under one "impedance" allocator claim."""
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -15,16 +14,14 @@ from dwf_mcp.artifacts import ArtifactWriter, CaptureSummary
 from dwf_mcp.device import DwfDevice
 from dwf_mcp.impedance_dsp import impedance_point
 from dwf_mcp.instrument import Instrument, InstrumentNotConfigured
+from dwf_mcp.instruments._sweep import SweepPoint, run_sweep
 from dwf_mcp.sweep_dsp import (
     QF_CLIPPED,
     QF_LOW_DRIVE,
     QF_LOW_DUT_VOLTAGE,
     QF_NAMES,
     QF_REF_MISMATCH,
-    assess_quality,
     detect_clip,
-    frequency_grid,
-    plan_acquisition,
 )
 
 _SPACINGS = ["log", "linear"]
@@ -57,6 +54,13 @@ IMPEDANCE_CONFIGURE_SCHEMA: dict[str, Any] = {
     },
 }
 IMPEDANCE_MEASURE_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
+
+_IMPEDANCE_COLUMNS = (
+    "frequency_hz", "impedance_ohms", "phase_deg", "resistance_ohms",
+    "reactance_ohms", "capacitance_f", "inductance_f", "q_factor", "dissipation",
+    "v_total_rms", "v_dut_rms", "achieved_cycles", "samples_per_cycle",
+    "coherence_error_cycles", "quality_flags", "clipping_flag",
+)
 
 
 class Impedance(Instrument):
@@ -141,111 +145,17 @@ class Impedance(Instrument):
             )
         cfg = self._config
         info = self.device.require_open()
-        be = self.device.backend
-        drive, ref, dut = cfg["drive_channel"], cfg["ref_channel"], cfg["dut_channel"]
-        n_ch = info.analog_in_channels
-        pins = [f"awg{drive}"] + [f"scope{i}" for i in range(1, n_ch + 1)]
-        freqs = frequency_grid(cfg["start_hz"], cfg["stop_hz"], cfg["points"], cfg["spacing"])
-        cols: dict[str, list[float]] = {k: [] for k in (
-            "frequency_hz", "impedance_ohms", "phase_deg", "resistance_ohms",
-            "reactance_ohms", "capacitance_f", "inductance_f", "q_factor", "dissipation",
-            "v_total_rms", "v_dut_rms", "achieved_cycles", "samples_per_cycle",
-            "coherence_error_cycles", "quality_flags", "clipping_flag",
-        )}
-        sr_seen: list[float] = []
-        buf_seen: list[int] = []
-        self.device.allocator.claim("impedance", pins)
-        try:
-            # Gate once for the whole sweep: amplitude is constant across all points, so
-            # one authorization covers every per-point awg_start (which call the backend
-            # directly to avoid per-frequency gate/log overhead during a long sweep).
-            self.device.gate_output("awg_start", channel=drive, amplitude=cfg["amplitude_v"])
-            # Clear any trigger left configured by a prior scope use: impedance free-runs
-            # each capture (settle, then arm), so a stale edge trigger would stall
-            # acquisition until the auto-timeout or capture at a trigger-dependent phase.
-            be.scope_set_trigger(source="none", channel=None, level_v=0.0,
-                                 condition="Either", position_s=0.0, timeout_s=0.0)
-            self._warm_up(be, ref, dut, n_ch)
-            for f_req in freqs:
-                self._point(be, info, float(f_req), cfg, ref, dut, n_ch, cols, sr_seen, buf_seen)
-        finally:
-            try:
-                be.awg_stop(channel=drive)
-            finally:
-                self.device.allocator.release("impedance")
+        cols, sr_seen, buf_seen = run_sweep(
+            self.device, info, instrument_name="impedance", cfg=cfg,
+            column_keys=_IMPEDANCE_COLUMNS, record_point=self._record_point,
+        )
         return self._write(cols, cfg, sr_seen, buf_seen, output_path, description)
 
-    def _point(
-        self,
-        be: Any,
-        info: Any,
-        f_req: float,
-        cfg: dict[str, Any],
-        ref: int,
-        dut: int,
-        n_ch: int,
-        cols: dict[str, list[float]],
-        sr_seen: list[float],
-        buf_seen: list[int],
-    ) -> None:
-        be.awg_configure(
-            channel=cfg["drive_channel"],
-            function="Sine",
-            freq_hz=f_req,
-            amplitude_v=cfg["amplitude_v"],
-            offset_v=0.0,
-            phase_deg=0.0,
-            symmetry=50.0,
-            run_time_s=None,
-        )
-        be.awg_start(channel=cfg["drive_channel"])
-        # Actuals come from hardware readbacks ONLY — never fall back to the requested/
-        # planned values: a soft-failed readback (0/garbage) would make the capture look
-        # coherent-by-construction and suppress the noncoherent flag (silent garbage).
-        f_act = be.awg_frequency_get(cfg["drive_channel"])
-        if not f_act > 0:
-            raise RuntimeError(
-                f"AWG frequency readback returned {f_act!r} (expected > 0) at "
-                f"requested {f_req} Hz")
-        plan = plan_acquisition(
-            f_act,
-            info.sample_rate_max_hz or 0.0,
-            info.analog_in_buffer_max or 0,
-            samples_per_cycle=cfg["samples_per_cycle"],
-            min_cycles=cfg["min_cycles"],
-        )
-        for c in range(1, n_ch + 1):
-            be.scope_configure(
-                channel=c,
-                range_v=cfg["range_v"],
-                offset_v=0.0,
-                coupling="DC",
-                enable=(c in (ref, dut)),
-            )
-        be.scope_set_acquisition(
-            sample_rate_hz=plan.sample_rate_hz,
-            buffer_size=plan.buffer_size,
-            mode="Single",
-        )
-        sr_act = be.scope_sample_rate_get()
-        if not sr_act > 0:
-            raise RuntimeError(
-                f"scope sample-rate readback returned {sr_act!r} (expected > 0)")
-        # Settle the AWG/DUT to steady state BEFORE arming: scope_arm() starts the single
-        # acquisition, so settling after the arm would capture the post-retune transient.
-        self._settle(f_act, cfg)
-        be.scope_arm()
-        self._await_done(plan)
-        v_total = np.asarray(be.scope_read(channel=ref, count=plan.buffer_size))
-        v_dut = np.asarray(be.scope_read(channel=dut, count=plan.buffer_size))
-        n = plan.buffer_size
-        achieved_cycles = f_act * n / sr_act
-        spc = sr_act / f_act
-        qflags, coh_err = assess_quality(
-            achieved_cycles, spc, f_act, sr_act, cfg["min_cycles"]
-        )
-        qflags |= plan.clamp_flags
-        p = impedance_point(v_total, v_dut, sr_act, f_act, cfg["r_ref"])
+    def _record_point(self, pt: SweepPoint, cols: dict[str, list[float]]) -> None:
+        cfg = self._config
+        assert cfg is not None
+        qflags = pt.qflags
+        p = impedance_point(pt.vin, pt.vout, pt.sr_act, pt.f_act, cfg["r_ref"])
         if p["drive_rms"] < cfg["min_drive_rms"]:
             qflags |= QF_LOW_DRIVE
         if p["v_dut_rms"] < cfg["min_dut_rms"]:
@@ -254,60 +164,18 @@ class Impedance(Instrument):
         if np.isfinite(zmag) and (zmag < _REF_MISMATCH_LO * cfg["r_ref"]
                                   or zmag > _REF_MISMATCH_HI * cfg["r_ref"]):
             qflags |= QF_REF_MISMATCH
-        if detect_clip(v_total, cfg["range_v"]) or detect_clip(v_dut, cfg["range_v"]):
+        if detect_clip(pt.vin, cfg["range_v"]) or detect_clip(pt.vout, cfg["range_v"]):
             qflags |= QF_CLIPPED
-        cols["frequency_hz"].append(f_act)
+        cols["frequency_hz"].append(pt.f_act)
         for key in ("impedance_ohms", "phase_deg", "resistance_ohms", "reactance_ohms",
                     "capacitance_f", "inductance_f", "q_factor", "dissipation",
                     "v_total_rms", "v_dut_rms"):
             cols[key].append(p[key])
-        cols["achieved_cycles"].append(achieved_cycles)
-        cols["samples_per_cycle"].append(spc)
-        cols["coherence_error_cycles"].append(coh_err)
+        cols["achieved_cycles"].append(pt.achieved_cycles)
+        cols["samples_per_cycle"].append(pt.spc)
+        cols["coherence_error_cycles"].append(pt.coh_err)
         cols["quality_flags"].append(int(qflags))
         cols["clipping_flag"].append(int(bool(qflags & QF_CLIPPED)))
-        sr_seen.append(sr_act)
-        buf_seen.append(n)
-
-    def _warm_up(self, be: Any, ref: int, dut: int, n_ch: int) -> None:
-        """One throwaway capture: the first AnalogIn acquisition after open is stale.
-        Fired unconditionally on every measure() (a sweep is heavyweight, so an
-        always-flush is strictly safer than per-open tracking at negligible cost).
-        One scope_arm captures all enabled channels in the same cycle, so a single
-        scope_read is enough to discard the stale acquisition for both ref and dut."""
-        for c in range(1, n_ch + 1):
-            be.scope_configure(
-                channel=c,
-                range_v=5.0,
-                offset_v=0.0,
-                coupling="DC",
-                enable=(c in (ref, dut)),
-            )
-        be.scope_set_acquisition(sample_rate_hz=100_000.0, buffer_size=1024, mode="Single")
-        be.scope_arm()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and be.scope_status() != "Done":
-            time.sleep(0.002)
-        be.scope_read(channel=ref, count=1024)
-
-    def _settle(self, freq_hz: float, cfg: dict[str, Any]) -> None:
-        if cfg["settle_s"] is not None:
-            base = cfg["settle_s"]
-        else:
-            base = cfg["settle_cycles"] / freq_hz if freq_hz else 0.0
-        delay = max(base, cfg["settle_min_s"])
-        if delay > 0:
-            time.sleep(delay)
-
-    def _await_done(self, plan: Any) -> None:
-        deadline = time.monotonic() + max(
-            plan.buffer_size / plan.sample_rate_hz * 10 + 1.0, 2.0
-        )
-        while time.monotonic() < deadline:
-            if self.device.backend.scope_status() == "Done":
-                return
-            time.sleep(0.002)
-        raise RuntimeError("impedance capture did not complete before deadline")
 
     def _write(
         self,
