@@ -119,7 +119,7 @@ async def test_sniff_spi_captures_external_transfer(app, jumperless, tmp_path: P
 
     # With DIO1→DIO2 loopback the decoded MISO should equal MOSI.
     miso_bytes = [row.as_py() for row in table.column("miso")]
-    for mo, mi in zip(mosi_bytes, miso_bytes):
+    for mo, mi in zip(mosi_bytes, miso_bytes, strict=False):
         assert mo == mi, f"MOSI/MISO mismatch: {mo!r} != {mi!r}"
 
 

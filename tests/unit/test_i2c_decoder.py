@@ -207,7 +207,7 @@ def test_streaming_single_chunk_matches_oneshot() -> None:
     out = streaming.feed(samples)
     out.extend(streaming.finalize())
     assert len(out) == len(one_shot)
-    for a, b in zip(out, one_shot):
+    for a, b in zip(out, one_shot, strict=False):
         assert a.address == b.address
         assert a.data == b.data
         assert abs(a.timestamp_s - b.timestamp_s) < 1e-9
@@ -231,7 +231,7 @@ def test_streaming_arbitrary_chunk_boundaries() -> None:
         out.extend(decoder.feed(samples[cut:]))
         out.extend(decoder.finalize())
         assert len(out) == len(expected), f"cut={cut} produced {len(out)} != {len(expected)}"
-        for a, b in zip(out, expected):
+        for a, b in zip(out, expected, strict=False):
             assert a.address == b.address, f"cut={cut} address mismatch"
             assert a.data == b.data, f"cut={cut} data mismatch"
             assert abs(a.timestamp_s - b.timestamp_s) < 1e-9, f"cut={cut} ts mismatch"

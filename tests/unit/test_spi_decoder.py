@@ -172,7 +172,7 @@ def test_streaming_single_chunk_matches_oneshot() -> None:
     out = streaming.feed(samples)
     out.extend(streaming.finalize())
     assert len(out) == len(one_shot)
-    for a, b in zip(out, one_shot):
+    for a, b in zip(out, one_shot, strict=False):
         assert a.mosi == b.mosi
         assert a.word_index == b.word_index
         assert abs(a.timestamp_s - b.timestamp_s) < 1e-9
@@ -196,6 +196,6 @@ def test_streaming_arbitrary_chunk_boundaries() -> None:
         out.extend(decoder.feed(samples[cut:]))
         out.extend(decoder.finalize())
         assert len(out) == len(expected), f"cut={cut} count mismatch"
-        for a, b in zip(out, expected):
+        for a, b in zip(out, expected, strict=False):
             assert a.mosi == b.mosi, f"cut={cut} mosi mismatch"
             assert a.word_index == b.word_index

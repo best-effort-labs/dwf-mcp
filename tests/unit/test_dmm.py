@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dwf_mcp.allocator import PinAllocator, PinAllocationError
+from dwf_mcp.allocator import PinAllocationError, PinAllocator
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.backends.fake import FakeBackend
 from dwf_mcp.device import DwfDevice
@@ -32,7 +32,7 @@ def dmm(device: DwfDevice, tmp_path: Path) -> DMM:
 
 
 def test_measure_calls_backend_sequence(dmm: DMM) -> None:
-    result = dmm.measure(channel=1, range_v=5.0)
+    dmm.measure(channel=1, range_v=5.0)
     fake: FakeBackend = dmm.device.backend  # type: ignore[assignment]
     names = [c[0] for c in fake.dmm_calls]
     assert names == ["configure", "arm", "stop"]

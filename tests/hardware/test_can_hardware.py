@@ -18,7 +18,7 @@ import pytest
 @pytest.mark.requires(instruments={"can"})
 def test_can_tx_frame_activity(app) -> None:
     """CAN TX path smoke test: verify a frame is generated on DIO0."""
-    from pydwf import DwfState, DwfAcquisitionMode
+    from pydwf import DwfAcquisitionMode, DwfState
 
     async def configure_can() -> None:
         await app.call_tool("can.configure", {

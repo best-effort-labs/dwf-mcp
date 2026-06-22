@@ -6,9 +6,9 @@ from typing import Any, ClassVar
 
 import pytest
 
-from dwf_mcp.instrument import Instrument
 from dwf_mcp.artifacts import ArtifactWriter
 from dwf_mcp.device import DwfDevice
+from dwf_mcp.instrument import Instrument
 
 
 class _AsyncInstrument(Instrument):
@@ -103,6 +103,7 @@ async def test_tick_idle_closes_device_after_timeout(tmp_path) -> None:
     """If idle_timeout_s elapses between tool calls, the device auto-closes
     on the next call_tool invocation (tick_idle runs first)."""
     import time
+
     from dwf_mcp.server import build_app
     app = build_app(backend_name="fake", workspace=str(tmp_path), idle_timeout_s=0.001)
     await app.call_tool("waveforms.open", {})
@@ -453,6 +454,7 @@ async def test_open_different_serial_while_open_errors(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_unsupported_instrument_returns_error(tmp_path, monkeypatch) -> None:
     import dataclasses
+
     from dwf_mcp.server import build_app
     app = build_app(backend_name="fake", workspace=str(tmp_path))
     await app.call_tool("waveforms.open", {})

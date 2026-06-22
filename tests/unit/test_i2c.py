@@ -33,7 +33,8 @@ def i2c(device: DwfDevice, tmp_path: Path) -> I2C:
 
 def test_configure_claims_dio_pins(i2c: I2C) -> None:
     i2c.configure(sda_pin="dio0", scl_pin="dio1", clock_hz=100_000)
-    assert i2c.device.allocator.claimed_pins() == {"i2c_engine": "i2c", "dio0": "i2c", "dio1": "i2c"}
+    assert i2c.device.allocator.claimed_pins() == {
+        "i2c_engine": "i2c", "dio0": "i2c", "dio1": "i2c"}
 
 
 def test_configure_rejects_conflicting_pins(i2c: I2C) -> None:
@@ -45,7 +46,8 @@ def test_configure_rejects_conflicting_pins(i2c: I2C) -> None:
 def test_reconfigure_swaps_pins(i2c: I2C) -> None:
     i2c.configure(sda_pin="dio0", scl_pin="dio1", clock_hz=100_000)
     i2c.configure(sda_pin="dio4", scl_pin="dio5", clock_hz=400_000)
-    assert i2c.device.allocator.claimed_pins() == {"i2c_engine": "i2c", "dio4": "i2c", "dio5": "i2c"}
+    assert i2c.device.allocator.claimed_pins() == {
+        "i2c_engine": "i2c", "dio4": "i2c", "dio5": "i2c"}
 
 
 def test_write_without_configure_raises(i2c: I2C) -> None:

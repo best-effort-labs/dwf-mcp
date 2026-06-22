@@ -167,7 +167,8 @@ def test_spi_start_returns_sniff_id(sniff: Sniff) -> None:
     fake.set_logic_record_status_sequence([(10, 0, 1), (0, 0, 0)])
 
     async def run() -> dict:
-        result = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
+        result = await sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
         await sniff.spi_stop(result["sniff_id"])
         return result
 
@@ -210,7 +211,8 @@ def test_spi_status_reports_samples(sniff: Sniff) -> None:
     fake.set_logic_record_status_sequence([(len(samples), 0, 1), (0, 0, 0)])
 
     async def run() -> tuple[dict, dict]:
-        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
+        start = await sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
         await asyncio.sleep(0.05)
         status = sniff.spi_status(start["sniff_id"])
         stop_result = await sniff.spi_stop(start["sniff_id"])
@@ -317,7 +319,8 @@ def test_spi_stop_releases_observer_claim(sniff: Sniff) -> None:
     fake.set_logic_record_status_sequence([(0, 0, 0)])
 
     async def run() -> None:
-        start = await sniff.spi_start(clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
+        start = await sniff.spi_start(
+            clk_pin="dio0", mosi_pin="dio1", mode=0, freq_hz=100_000, max_duration_s=0.1)
         await sniff.spi_stop(start["sniff_id"])
 
     asyncio.run(run())

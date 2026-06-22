@@ -12,8 +12,10 @@ def _can_bits(
 ) -> list[int]:
     """Build the raw bit stream for a Classical CAN frame (no bit-stuffing yet).
 
-    Standard frame layout: SOF | ID[10:0] | RTR | IDE=0 | r0 | DLC[3:0] | DATA | CRC15 | CRC delim | ACK | ACK delim | EOF×7
-    Extended frame layout: SOF | base ID[10:0] | SRR=1 | IDE=1 | ext ID[17:0] | RTR | r1 | r0 | DLC[3:0] | DATA | CRC15 | …
+    Standard frame layout: SOF | ID[10:0] | RTR | IDE=0 | r0 | DLC[3:0] | DATA |
+        CRC15 | CRC delim | ACK | ACK delim | EOF×7
+    Extended frame layout: SOF | base ID[10:0] | SRR=1 | IDE=1 | ext ID[17:0] | RTR |
+        r1 | r0 | DLC[3:0] | DATA | CRC15 | …
     """
     bits: list[int] = []
     bits.append(0)  # SOF dominant
@@ -298,7 +300,7 @@ def test_streaming_single_chunk_matches_oneshot() -> None:
     out = streaming.feed(samples)
     out.extend(streaming.finalize())
     assert len(out) == len(one_shot)
-    for a, b in zip(out, one_shot):
+    for a, b in zip(out, one_shot, strict=False):
         assert a.frame_id == b.frame_id
         assert a.data == b.data
         assert abs(a.timestamp_s - b.timestamp_s) < 1e-9

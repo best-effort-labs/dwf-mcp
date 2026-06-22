@@ -1,6 +1,7 @@
 """Standalone ADP2230 hardware tests — no external wiring required.
 
-Run: DWF_TEST_SERIAL=210417BAF36D .venv/bin/pytest tests/hardware/test_adp2230_hardware.py -m hardware -v
+Run: DWF_TEST_SERIAL=210417BAF36D .venv/bin/pytest \
+    tests/hardware/test_adp2230_hardware.py -m hardware -v
 
 These verify capabilities, electrical-config round-trips, supply, and AWG/pattern
 start/stop using only the device itself. Physical signal verification (loopback,

@@ -42,7 +42,8 @@ def test_vcd_writer_missing_package_raises(tmp_path: Path, monkeypatch) -> None:
 
 def test_vcd_stream_writer_single_chunk_matches_oneshot(tmp_path: Path) -> None:
     """VcdStreamWriter with one full chunk produces identical output to write()."""
-    from dwf_mcp.vcd_writer import VcdStreamWriter, write as vcd_write
+    from dwf_mcp.vcd_writer import VcdStreamWriter
+    from dwf_mcp.vcd_writer import write as vcd_write
 
     samples = np.array([[0, 0], [0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.uint8)
     pin_names = ["dio0", "dio1"]
@@ -60,7 +61,8 @@ def test_vcd_stream_writer_single_chunk_matches_oneshot(tmp_path: Path) -> None:
 
 def test_vcd_stream_writer_multi_chunk_matches_oneshot(tmp_path: Path) -> None:
     """VcdStreamWriter split across two chunks produces same output as write() on full array."""
-    from dwf_mcp.vcd_writer import VcdStreamWriter, write as vcd_write
+    from dwf_mcp.vcd_writer import VcdStreamWriter
+    from dwf_mcp.vcd_writer import write as vcd_write
 
     samples = np.array(
         [[1, 0], [1, 1], [0, 1], [0, 0], [1, 0], [0, 0]], dtype=np.uint8
@@ -107,7 +109,9 @@ def test_vcd_stream_writer_close_is_idempotent(tmp_path: Path) -> None:
     w.close()  # second close must not raise
 
 
-def test_vcd_stream_writer_missing_package_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vcd_stream_writer_missing_package_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import dwf_mcp.vcd_writer as vw
     monkeypatch.setattr(vw, "HAS_VCD", False)
     with pytest.raises(ImportError, match="pyvcd"):

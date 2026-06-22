@@ -28,8 +28,8 @@ import os
 import threading
 from pathlib import Path
 
-import pytest
 import pyarrow.parquet as pq
+import pytest
 
 from tests.hardware.conftest import wait_for_sniff_claim
 

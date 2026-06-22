@@ -87,7 +87,9 @@ def test_capture_pin_claim_held_after_capture(logic: Logic) -> None:
     assert "dio0" in logic.device.allocator.claimed_pins()
 
 
-def test_capture_invokes_vcd_writer(logic: Logic, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_capture_invokes_vcd_writer(
+    logic: Logic, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import dwf_mcp.vcd_writer as vw
     calls = []
     def fake_write(path, samples, pin_names, sample_rate_hz):
@@ -239,7 +241,7 @@ async def test_record_claims_released_after_stop(logic: Logic) -> None:
 
 @pytest.mark.asyncio
 async def test_record_start_vcd_opens_vcd_writer(logic: Logic) -> None:
-    vcd = pytest.importorskip("vcd")
+    pytest.importorskip("vcd")
     result = await logic.record_start(
         pins=["dio0", "dio1"],
         sample_rate_hz=1_000_000.0,
@@ -258,7 +260,7 @@ async def test_record_start_vcd_opens_vcd_writer(logic: Logic) -> None:
 
 @pytest.mark.asyncio
 async def test_record_start_vcd_on_chunk_sync_slices_pins(logic: Logic, tmp_path: Path) -> None:
-    vcd = pytest.importorskip("vcd")
+    pytest.importorskip("vcd")
     fake: FakeBackend = logic.device.backend  # type: ignore[assignment]
     # raw chunk has 16 channels; configured pins are dio0 and dio1 (indices 0,1)
     raw = np.zeros((4, 16), dtype=np.uint8)
@@ -285,7 +287,7 @@ async def test_record_start_vcd_on_chunk_sync_slices_pins(logic: Logic, tmp_path
 
 @pytest.mark.asyncio
 async def test_record_stop_vcd_closes_writer(logic: Logic) -> None:
-    vcd = pytest.importorskip("vcd")
+    pytest.importorskip("vcd")
     result = await logic.record_start(
         pins=["dio0"], sample_rate_hz=1_000_000.0, duration_s=0.01, format="vcd"
     )
