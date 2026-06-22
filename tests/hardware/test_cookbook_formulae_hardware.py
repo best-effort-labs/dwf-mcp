@@ -55,8 +55,15 @@ _CABLED_CHANNELS = _parse_cabled_channels()
 # ---------------------------------------------------------------------------
 
 @pytest.mark.hardware
-@pytest.mark.standalone
+@pytest.mark.wired
 @pytest.mark.requires(instruments={"awg", "scope"})
+@pytest.mark.jumperless(connections={
+    # W1 -> CH1_POS loopback with the differential-ground topology the AD3 needs
+    # (same as test_scope_record_hardware): GND bridge + CH1_NEG tied to AD3_GND.
+    "gnd_bridge": ("AD3_GND", "GND"),
+    "ch1_neg": ("CH1_NEG", "AD3_GND"),
+    "awg_to_scope": ("W1", "CH1_POS"),
+})
 def test_square_wave_thd_matches_theory(device, artifacts) -> None:
     """Drive W1 with a 1 kHz square wave, capture coherently, compute THD via
     the cookbook formula, and assert it falls in [0.30, 0.55].
@@ -162,6 +169,7 @@ def test_square_wave_thd_matches_theory(device, artifacts) -> None:
         samples, sr_actual, window="rectangular", amplitude="rms"
     )
     thd_value = formulae.thd(spec_result, fundamental_hz=fundamental_hz, n_harmonics=9)
+    print(f"\nsquare-wave THD (9 harmonics) = {thd_value:.4f}  (ideal ≈ 0.483)")
 
     # Ideal odd-harmonic square wave: THD = sqrt(1/9 + 1/25 + 1/49 + ...) ≈ 0.483.
     # Bandwidth roll-off (AWG output impedance × scope input capacitance, AD3 ≈ 25 MHz
