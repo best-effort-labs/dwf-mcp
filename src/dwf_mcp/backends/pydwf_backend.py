@@ -61,6 +61,9 @@ class PydwfBackend(DwfBackend):
         self._configs: list[DeviceConfig] = []
         # Logic sample bits (16 or 32), set by logic_configure/logic_record_configure.
         self._logic_sample_bits: int = 16
+        # Achieved logic sample rate (Hz), set by logic_configure; used by the
+        # trigger path to convert a position in seconds to a sample count.
+        self._logic_sample_rate_hz: float = 0.0
 
     def _query_configs(self, device_index: int) -> list[DeviceConfig]:
         ee = self._dwf.deviceEnum
@@ -677,12 +680,17 @@ class PydwfBackend(DwfBackend):
         din.bufferSizeSet(buffer_size)
         din.acquisitionModeSet(DwfAcquisitionMode.Single)
         self._logic_sample_bits = sample_bits
+        # Achieved (post-divider) rate; the trigger path needs it to convert a
+        # position in seconds to a sample count.
+        self._logic_sample_rate_hz = clock / divider
 
     def logic_set_trigger(
         self, source: str, pin_idx: int | None, level: float | None,
         condition: str | None, position_s: float | None, timeout_s: float | None,
     ) -> None:
         from pydwf import DwfTriggerSource
+
+        from ..logic_trigger import digital_trigger_masks, position_samples
         din = self._digital_in
         src_map = {
             "none":                 DwfTriggerSource.None_,
@@ -691,8 +699,13 @@ class PydwfBackend(DwfBackend):
             "external2":            DwfTriggerSource.External2,
         }
         din.triggerSourceSet(src_map[source])
+        # Configure the edge detector (which pin, which edge). Without this the
+        # DetectorDigitalIn source would never actually fire on the requested pin.
+        level_low, level_high, edge_rise, edge_fall = digital_trigger_masks(pin_idx, condition)
+        din.triggerSet(level_low, level_high, edge_rise, edge_fall)
         if position_s is not None:
-            din.triggerPositionSet(position_s)
+            # DigitalIn trigger position is in SAMPLES (unsigned int), not seconds.
+            din.triggerPositionSet(position_samples(position_s, self._logic_sample_rate_hz))
         if timeout_s is not None:
             din.triggerAutoTimeoutSet(timeout_s)
 
