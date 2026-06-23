@@ -441,8 +441,13 @@ class FakeBackend(DwfBackend):
         self._awg_freq[channel] = freq_hz
         self._awg_amp = amplitude_v
 
-    def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
-        self.awg_calls.append(("upload_custom", {"channel": channel, "n_samples": len(samples)}))
+    def awg_upload_custom(
+        self, channel: int, samples: np.ndarray, amplitude_v: float
+    ) -> None:
+        self.awg_calls.append((
+            "upload_custom",
+            {"channel": channel, "n_samples": len(samples), "amplitude_v": amplitude_v},
+        ))
 
     def awg_start(self, channel: int) -> None:
         self.awg_calls.append(("start", {"channel": channel}))

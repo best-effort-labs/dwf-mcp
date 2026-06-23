@@ -306,6 +306,66 @@ def digital_loopback(request, dut_caps, jumperless, pytestconfig, _require):
         yield (spec["out"], spec["inp"])
 
 
+def _parse_cabled_channels() -> set[int]:
+    """Scope channels declared as physically cabled (W1->CHn) via ADP_AWG_SCOPE_CHANNELS
+    (e.g. "1", "2", "1,2"). Used for analog loopback on devices whose analog I/O the
+    Jumperless can't route (the ADP2230's BNC connectors)."""
+    out: set[int] = set()
+    for tok in os.environ.get("ADP_AWG_SCOPE_CHANNELS", "").replace(",", " ").split():
+        with contextlib.suppress(ValueError):
+            out.add(int(tok))
+    return out
+
+
+# Per-device AWG W1 -> scope CHn loopback descriptor. `jumperless` holds the Jumperless
+# wiring when the device's analog I/O is on header rows it can reach (AD3); None means
+# the analog I/O is on BNC connectors the Jumperless can't wire (ADP2230) -> manual cable,
+# and the scope channel is taken from ADP_AWG_SCOPE_CHANNELS (only W1 is an AWG output).
+_ANALOG_LOOPBACK: dict[int, dict] = {
+    10: dict(  # AD3: W1 and CH1 are on the flywire header -> Jumperless-routable.
+        awg_channel=1,
+        scope_channel=1,
+        jumperless={
+            "gnd_bridge": ("AD3_GND", "GND"),
+            "ch1_neg": ("CH1_NEG", "AD3_GND"),
+            "awg_to_scope": ("W1", "CH1_POS"),
+        },
+    ),
+    14: dict(awg_channel=1, scope_channel=None, jumperless=None),  # ADP2230: BNC cable.
+}
+
+
+@pytest.fixture
+def analog_loopback(request, dut_caps, jumperless, pytestconfig, _require):
+    """Yield (awg_channel, scope_channel) for a W1 -> scope loopback, wired for the
+    connected device. On the AD3 the loopback is auto-routed through the Jumperless
+    (autonomous). On the ADP2230 the analog I/O is on BNC connectors the Jumperless
+    can't reach, so it needs a manual cable from W1 to a scope channel declared via
+    ADP_AWG_SCOPE_CHANNELS (skipped otherwise). The AWG channel is always 1 (W1)."""
+    if request.node.get_closest_marker("jumperless") is not None:
+        raise RuntimeError("analog_loopback tests must not also use @pytest.mark.jumperless")
+    if dut_caps is None:
+        pytest.skip("no DUT available")
+    spec = _ANALOG_LOOPBACK.get(dut_caps.devid)
+    if spec is None:
+        pytest.skip(f"no analog-loopback descriptor for devid {dut_caps.devid}")
+    if spec["jumperless"] is not None:
+        with route_connections(jumperless, spec["jumperless"],
+                               skip_prompts=pytestconfig.getoption("--skip-wiring-prompts"),
+                               manual=pytestconfig.getoption("--jumperless-manual")):
+            yield (spec["awg_channel"], spec["scope_channel"])
+    else:
+        cabled = _parse_cabled_channels()
+        if not cabled:
+            pytest.skip(
+                f"devid {dut_caps.devid} analog I/O is on BNC (not Jumperless-routable); "
+                "set ADP_AWG_SCOPE_CHANNELS=<scope ch> with W1 cabled to that CH"
+            )
+        # AWG output is always W1 (channel 1); the scope channel is whichever the
+        # operator cabled W1 into (lowest if several declared).
+        yield (spec["awg_channel"], sorted(cabled)[0])
+
+
 @pytest.fixture(autouse=True)
 def wire(request: pytest.FixtureRequest, jumperless, pytestconfig: pytest.Config, _require):
     marker = request.node.get_closest_marker("jumperless")

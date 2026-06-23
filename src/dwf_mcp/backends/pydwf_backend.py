@@ -508,13 +508,20 @@ class PydwfBackend(DwfBackend):
         # Apply params to hardware without starting output.
         ao.configure(ch_idx, False)
 
-    def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
-        from pydwf import DwfAnalogOutNode
+    def awg_upload_custom(
+        self, channel: int, samples: np.ndarray, amplitude_v: float
+    ) -> None:
+        from pydwf import DwfAnalogOutFunction, DwfAnalogOutNode
         ch_idx = channel - 1
         ao = self._analog_out
         node = DwfAnalogOutNode.Carrier
         ao.nodeEnableSet(ch_idx, node, True)
-        ao.nodeDataSet(ch_idx, node, samples.tolist())
+        # The node must be in Custom mode for the uploaded buffer to play, and the
+        # amplitude must be applied here (it scales the normalised [-1,1] samples).
+        ao.nodeFunctionSet(ch_idx, node, DwfAnalogOutFunction.Custom)
+        # nodeDataSet wants an ndarray (it calls .astype internally) — a Python list raises.
+        ao.nodeDataSet(ch_idx, node, np.asarray(samples, dtype=np.float64))
+        ao.nodeAmplitudeSet(ch_idx, node, amplitude_v)
         ao.configure(ch_idx, False)
 
     def awg_start(self, channel: int) -> None:
