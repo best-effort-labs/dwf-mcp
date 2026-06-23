@@ -87,6 +87,33 @@ def test_capture_pin_claim_held_after_capture(logic: Logic) -> None:
     assert "dio0" in logic.device.allocator.claimed_pins()
 
 
+def test_set_trigger_detector_requires_pin(logic: Logic) -> None:
+    logic.configure(pins=["dio0"], sample_rate_hz=1_000_000, buffer_size=1024)
+    with pytest.raises(ValueError, match="pin"):
+        logic.set_trigger(source="detector_digital_in", condition="Rising")
+
+
+def test_set_trigger_detector_requires_condition(logic: Logic) -> None:
+    logic.configure(pins=["dio0"], sample_rate_hz=1_000_000, buffer_size=1024)
+    with pytest.raises(ValueError, match="condition"):
+        logic.set_trigger(source="detector_digital_in", pin="dio0")
+
+
+def test_set_trigger_detector_forwards_pin_and_condition(logic: Logic) -> None:
+    logic.configure(pins=["dio0", "dio1"], sample_rate_hz=1_000_000, buffer_size=1024)
+    logic.set_trigger(source="detector_digital_in", pin="dio1", condition="Rising")
+    fake: FakeBackend = logic.device.backend  # type: ignore[assignment]
+    trig = [c for c in fake.logic_calls if c[0] == "set_trigger"][-1][1]
+    assert trig["pin_idx"] == 1
+    assert trig["condition"] == "Rising"
+
+
+def test_set_trigger_none_source_needs_no_pin(logic: Logic) -> None:
+    logic.configure(pins=["dio0"], sample_rate_hz=1_000_000, buffer_size=1024)
+    # A non-detector source (free-run / external) does not require a pin/condition.
+    logic.set_trigger(source="none")
+
+
 def test_capture_invokes_vcd_writer(
     logic: Logic, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

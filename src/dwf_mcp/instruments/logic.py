@@ -53,7 +53,7 @@ LOGIC_TRIGGER_SCHEMA: dict[str, Any] = {
         "pin": {"type": "string", "pattern": "^(din|dio)\\d+$"},
         "level": {"type": "number"},
         "condition": {"type": "string", "enum": ["Rising", "Falling", "Either"]},
-        "position_s": {"type": "number", "default": 0.0},
+        "position_s": {"type": "number", "minimum": 0.0, "default": 0.0},
         "timeout_s": {"type": "number", "minimum": 0.0, "default": 1.0},
     },
 }
@@ -175,9 +175,22 @@ class Logic(Instrument):
     ) -> dict[str, Any]:
         if self._config is None:
             raise InstrumentNotConfigured("logic.configure must be called before set_trigger")
+        if source == "detector_digital_in" and (pin is None or condition is None):
+            # The digital-in edge detector needs both a pin and an edge, or it
+            # silently arms nothing and the capture never triggers.
+            raise ValueError(
+                "source 'detector_digital_in' requires both pin and condition"
+            )
         if pin is not None:
+            self.device.validate_pin(pin)
             assert self.device.inventory is not None
-            pin_idx: int | None = self.device.inventory.subsystem_bit(pin, "digitalin")
+            bit = self.device.inventory.subsystem_bit(pin, "digitalin")
+            if bit >= 32:
+                raise ValueError(
+                    "logic trigger on pins above bit 31 (dio32..dio39) is not yet "
+                    "supported pending hardware verification"
+                )
+            pin_idx: int | None = bit
         else:
             pin_idx = None
         self.device.backend.logic_set_trigger(
