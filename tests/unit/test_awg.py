@@ -123,6 +123,16 @@ def test_upload_custom_rejects_out_of_range_samples(awg: AWG) -> None:
         awg.upload_custom(channel=1, samples_npy_path=None, _samples=bad)
 
 
+def test_upload_custom_passes_amplitude_to_backend(awg: AWG) -> None:
+    # amplitude_v must reach the backend so the custom waveform is actually scaled
+    # (the backend applies it via nodeAmplitudeSet); previously it was dropped.
+    samples = np.linspace(-1.0, 1.0, 16)
+    awg.upload_custom(channel=1, samples_npy_path=None, amplitude_v=2.5, _samples=samples)
+    fake = awg.device.backend
+    call = [c for c in fake.awg_calls if c[0] == "upload_custom"][-1][1]
+    assert call["amplitude_v"] == 2.5
+
+
 def test_release_stops_all_channels(awg: AWG) -> None:
     awg.configure(channel=1, function="Sine", frequency_hz=1000.0, amplitude_v=1.0)
     awg.configure(channel=2, function="Square", frequency_hz=500.0, amplitude_v=0.5)

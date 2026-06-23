@@ -155,7 +155,9 @@ class AWG(Instrument):
         new_pins = sorted(_CHANNEL_TO_PIN[c] for c in (prior_channels | {channel}))
         self.device.allocator.claim("awg", new_pins)
         try:
-            self.device.backend.awg_upload_custom(channel=channel, samples=samples)
+            self.device.backend.awg_upload_custom(
+                channel=channel, samples=samples, amplitude_v=amplitude_v
+            )
         except Exception:
             if prior_channels:
                 prior_pins = sorted(_CHANNEL_TO_PIN[c] for c in prior_channels)

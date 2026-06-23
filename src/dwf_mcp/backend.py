@@ -152,7 +152,9 @@ class DwfBackend(ABC):
     ) -> None:
         raise NotImplementedError
 
-    def awg_upload_custom(self, channel: int, samples: np.ndarray) -> None:
+    def awg_upload_custom(
+        self, channel: int, samples: np.ndarray, amplitude_v: float
+    ) -> None:
         raise NotImplementedError
 
     def awg_start(self, channel: int) -> None:
