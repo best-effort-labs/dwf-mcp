@@ -556,13 +556,20 @@ class PydwfBackend(DwfBackend):
             "high": DwfDigitalOutIdle.High,
             "hiz":  DwfDigitalOutIdle.Init,  # Init = Hi-Z on AD3
         }
+        from ..pattern_util import pattern_counts
+        if freq_hz <= 0.0:
+            raise ValueError(f"pattern frequency must be > 0 Hz, got {freq_hz}")
         clock = dout.internalClockInfo()
-        period = max(1, round(clock / freq_hz))
-        high_count = max(1, round(period * duty))
-        low_count = max(1, period - high_count)
+        counter_max = int(dout.counterInfo(bit_idx)[1])
+        divider_max = int(dout.dividerInfo(bit_idx)[1])
+        # Raise the divider as needed so the per-phase counts fit the counter;
+        # a fixed divider of 1 silently produces no output below ~clock/(2*counter_max) Hz.
+        divider, low_count, high_count = pattern_counts(
+            clock, freq_hz, duty, counter_max, divider_max
+        )
         dout.enableSet(bit_idx, True)
         dout.typeSet(bit_idx, type_map[function])
-        dout.dividerSet(bit_idx, 1)
+        dout.dividerSet(bit_idx, divider)
         dout.counterSet(bit_idx, low_count, high_count)
         dout.idleSet(bit_idx, idle_map[idle_state])
 
