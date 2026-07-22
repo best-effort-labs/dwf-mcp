@@ -315,16 +315,10 @@ class DwfMcpApp:
 
 _SERVER_INSTRUCTIONS = (
     "dwf-mcp drives a Digilent WaveForms device (scope, AWG, supply, logic, "
-    "protocol engines, and a spectrum/bode/impedance analyzer trio).\n\n"
-    "MEASUREMENT COOKBOOK: this server ships a recipe cookbook. To pick the right "
-    "tool + settings + wiring for a measurement, first read the resource "
-    "`dwf://cookbook/index` (intent -> recipe), then the matching domain resource "
-    "(`dwf://cookbook/{freq-domain,time-domain,protocols,bench}`).\n\n"
-    "GLOBAL GOTCHAS: (1) Free-run/sweep paths must SETTLE BEFORE arming the scope "
-    "(scope_arm starts the acquisition). (2) The first AnalogIn acquisition after a "
-    "device open returns a stale buffer — discard one warm-up read on free-run paths. "
-    "(3) For routed/differential measurements, bridge the device GND to the signal "
-    "ground and tie CH_NEG inputs to GND."
+    "protocol engines, and a spectrum/bode/impedance analyzer trio). Before any "
+    "measurement, read resource `dwf://cookbook/index` to pick the tool + settings + "
+    "wiring; hardware gotchas (settle-before-arm, stale first read, grounding) are in "
+    "`dwf://cookbook/bench`."
 )
 
 _COOKBOOK_URI_PREFIX = "dwf://cookbook/"
